@@ -45,6 +45,8 @@ class Photo(
     val fromVideo: Boolean = false,
     /** EXIF capture time (sortable, see [Exif.captureTime]); an ordering clue. */
     val taken: Long? = null,
+    /** EXIF 35 mm-equivalent focal length; sets how strongly the guessed rims curve. */
+    val focal35: Float? = null,
 ) {
     /** Stable list key (thumbnails keep their gesture state while being reordered). */
     val id: Long = nextId++
@@ -101,7 +103,8 @@ class AppState(private val scope: CoroutineScope) {
             val bytes = file.readBytes()
             val photo = withContext(Dispatchers.Default) {
                 val img = loadPhoto(bytes)
-                Photo(file.name, img, EdgeSuggester.suggest(img), taken = Exif.captureTime(bytes))
+                val focal = Exif.focalLength35(bytes)
+                Photo(file.name, img, EdgeSuggester.suggest(img, focal), taken = Exif.captureTime(bytes), focal35 = focal)
             }
             photos += photo
         }
@@ -167,7 +170,7 @@ class AppState(private val scope: CoroutineScope) {
 
     fun autoGuides() {
         val p = current ?: return
-        task { p.guides = withContext(Dispatchers.Default) { EdgeSuggester.suggest(p.image) } }
+        task { p.guides = withContext(Dispatchers.Default) { EdgeSuggester.suggest(p.image, p.focal35) } }
     }
 
     /**

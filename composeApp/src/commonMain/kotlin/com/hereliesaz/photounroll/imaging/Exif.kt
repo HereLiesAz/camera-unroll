@@ -21,6 +21,16 @@ object Exif {
         return digits.toLong() * 1000 + ms
     }
 
+    /** 35 mm-equivalent focal length (FocalLengthIn35mmFilm), or null if absent. */
+    fun focalLength35(jpeg: ByteArray): Float? {
+        val (t, end) = tiff(jpeg) ?: return null
+        if (t + 8 > end) return null
+        val little = jpeg.u8(t) == 0x49
+        val exifIfd = tag(jpeg, t + u32(jpeg, t + 4, little), end, little, 0x8769)?.let { t + u32(jpeg, it + 8, little) } ?: return null
+        val e = tag(jpeg, exifIfd, end, little, 0xA405) ?: return null
+        return u16(jpeg, e + 8, little).takeIf { it > 0 }?.toFloat()
+    }
+
     /** Finds the EXIF TIFF header: (start, end) or null. */
     private fun tiff(jpeg: ByteArray): Pair<Int, Int>? {
         if (jpeg.size < 4 || jpeg.u8(0) != 0xFF || jpeg.u8(1) != 0xD8) return null
