@@ -75,6 +75,7 @@ fun App() = PhotoUnrollTheme {
     val videoPicker = rememberFilePickerLauncher(type = FileKitType.Video, mode = FileKitMode.Single) { file ->
         if (file != null) state.importVideo(file)
     }
+    FileDropEffect(onImages = { state.import(it) }, onVideo = { state.importVideo(it) })
     val save = rememberJpegSaver()
     val addPhotos = { picker.launch() }
     val addVideo = { videoPicker.launch() }
