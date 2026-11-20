@@ -19,10 +19,15 @@ object Arranger {
      * Builds the strongest chain through all strips: edges are taken best-first, skipping any
      * that would give a strip a third neighbor or close a loop early. A full walk-around
      * closes the loop on the last edge; that weakest seam becomes the cut.
+     *
+     * [rank] (optional, from metadata: capture time or file-name sequence) is a second
+     * opinion: photos consecutive in rank get a bonus on their edge, a closed ring is cut
+     * between the first and last in rank when that seam exists, the result runs in rank
+     * direction, and with no visual overlap at all the rank order is returned as is.
      */
-    fun order(strips: List<RgbaImage>, progress: (Float) -> Unit = {}): IntArray {
+    fun order(strips: List<RgbaImage>, progress: (Float) -> Unit = {}, rank: IntArray? = null): IntArray {
         val n = strips.size
-        if (n <= 2) return IntArray(n) { it }
+        if (n <= 2) return rank?.let { r -> (0 until n).sortedBy { r[it] }.toIntArray() } ?: IntArray(n) { it }
         val planes = strips.map(::plane)
 
         class Edge(val a: Int, val b: Int, val w: Float)
@@ -31,12 +36,17 @@ object Arranger {
         var done = 0
         val total = n * (n - 1) / 2
         for (i in 0 until n) for (j in i + 1 until n) {
-            val w = strength(planes[i], planes[j])
+            var w = strength(planes[i], planes[j])
+            if (rank != null && kotlin.math.abs(rank[i] - rank[j]) == 1) w += RANK_BONUS
             weight[i * n + j] = w; weight[j * n + i] = w
             edges += Edge(i, j, w)
             progress(++done / total.toFloat())
         }
         edges.sortByDescending { it.w }
+        if (rank != null && edges.all { it.w <= RANK_BONUS }) {
+            progress(1f)
+            return (0 until n).sortedBy { rank[it] }.toIntArray()
+        }
 
         val degree = IntArray(n)
         val parent = IntArray(n) { it }
@@ -60,7 +70,8 @@ object Arranger {
 
         // A closed ring is cut at its weakest seam so it reads as a path.
         if (taken == n) {
-            val weakest = chosen.minBy { it.w }
+            val ends = rank?.let { r -> setOf(r.indexOfFirst { it == 0 }, r.indexOfFirst { it == n - 1 }) }
+            val weakest = chosen.firstOrNull { ends != null && setOf(it.a, it.b) == ends } ?: chosen.minBy { it.w }
             adj[weakest.a].remove(weakest.b)
             adj[weakest.b].remove(weakest.a)
         }
@@ -82,6 +93,12 @@ object Arranger {
         }
         for (i in 0 until n) if (!seen[i]) out += i
         refine(out, weight, n)
+        // Visual order has no direction; take the one that agrees with the metadata.
+        if (rank != null) {
+            var agree = 0
+            for (k in 1 until n) agree += if (rank[out[k]] > rank[out[k - 1]]) 1 else -1
+            if (agree < 0) out.reverse()
+        }
         return out.toIntArray()
     }
 
@@ -222,6 +239,12 @@ object Arranger {
     }
 
     private const val SLIVER = 0.25f
+
+    /**
+     * Edge bonus for photos consecutive in metadata. Small next to a clean visual match (~1),
+     * so pictures override a shuffled clock; decisive between look-alikes and blank surfaces.
+     */
+    private const val RANK_BONUS = 0.15f
 
     /** Correlation at or above this counts as a perfect match; beyond it only noise differs. */
     private const val CLEAN_MATCH = 0.96f

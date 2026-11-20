@@ -23,7 +23,9 @@ Both results open in a viewer that drags/flings horizontally and, when closed in
 
 ### Automatic order
 
-Photos are put in capture order on import (and by **ORDER**), whatever order the picker returned them in. Each photo is flattened with its guides (or reprojected with the lens FOV), reduced to texture only (shading and contrast evened out), and every pair is correlated at every slide. The strongest chain through all of them wins; a full walk-around closes into a ring that is cut at its weakest seam, then single photos are moved wherever they strengthen the chain. Run **ORDER** again after correcting guides. Video frames are never reordered.
+Photos are put in capture order on import (and by **ORDER**), whatever order the picker returned them in. Each photo is flattened with its guides (or reprojected with the lens FOV), reduced to texture only (shading and contrast evened out), and every pair is correlated at every slide. The strongest chain through all of them wins; a full walk-around closes into a ring that is cut at its weakest seam, then single photos are moved wherever they strengthen the chain. Metadata is a second opinion: EXIF capture time (or, failing that, the number in the file name) adds a small bonus to photos taken consecutively, picks where a ring is cut and which way the strip runs, and is the whole answer when nothing overlaps. Run **ORDER** again after correcting guides. Video frames are never reordered.
+
+Drag a thumbnail sideways to reorder by hand. On the web, drop photos or a video anywhere on the page to import them.
 
 ### Rotate and warp
 
@@ -87,5 +89,5 @@ iOS: open an Xcode project at `iosApp/` whose target embeds the `ComposeApp` fra
 
 - Unroll assumes a near-orthographic view with the axis vertical in frame. Shoot from a few diameters away; telephoto beats wide.
 - Stitching aligns by translation only. Keep height and distance constant; vertical drift up to ~6% is absorbed.
-- Order is recovered from content, so photos with no overlap, a plain featureless surface, or a surface with exact repeats (evenly spaced identical stripes) can be misordered; check the thumbnails and fix the guides, then press ORDER.
+- Order is recovered from content, so photos with no overlap, a plain featureless surface, or a surface with exact repeats (evenly spaced identical stripes) can be misordered; check the thumbnails and fix the guides, then press ORDER, or drag the thumbnails into place.
 - Inputs are capped at 1600 px on the long side to stay inside mobile and browser memory.

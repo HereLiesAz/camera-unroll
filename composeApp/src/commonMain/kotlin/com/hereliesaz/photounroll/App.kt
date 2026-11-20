@@ -19,6 +19,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -298,10 +303,32 @@ private fun ActionRow(content: @Composable () -> Unit) {
 
 @Composable
 private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit) {
+    // Drag a thumbnail sideways to reorder: it follows the pointer and trades places with a
+    // neighbor once past half a slot. The strip still scrolls from the gaps, add tiles and wheel.
+    var dragging by remember { mutableStateOf<Photo?>(null) }
+    var dragDx by remember { mutableStateOf(0f) }
+    val slot = with(LocalDensity.current) { 88.dp.toPx() }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        itemsIndexed(state.photos) { i, p ->
+        itemsIndexed(state.photos, key = { _, p -> p.id }) { i, p ->
+            val isDragged = dragging === p
             Box(
                 Modifier
+                    .zIndex(if (isDragged) 1f else 0f)
+                    .graphicsLayer { translationX = if (isDragged) dragDx else 0f }
+                    .pointerInput(p, state.busy) {
+                        if (state.busy) return@pointerInput
+                        detectDragGestures(
+                            onDragStart = { dragging = p; dragDx = 0f },
+                            onDragEnd = { dragging = null; dragDx = 0f },
+                            onDragCancel = { dragging = null; dragDx = 0f },
+                        ) { change, delta ->
+                            change.consume()
+                            dragDx += delta.x
+                            val at = state.photos.indexOf(p)
+                            if (dragDx > slot / 2 && at < state.photos.lastIndex) { state.move(at, at + 1); dragDx -= slot }
+                            else if (dragDx < -slot / 2 && at > 0) { state.move(at, at - 1); dragDx += slot }
+                        }
+                    }
                     .size(80.dp)
                     .border(if (i == state.selected) 2.dp else 1.dp, if (i == state.selected) Ink.Bone else Ink.Ash)
                     .clickable { state.selected = i },

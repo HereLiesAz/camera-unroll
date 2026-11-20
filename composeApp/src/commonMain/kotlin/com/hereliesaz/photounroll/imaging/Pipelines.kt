@@ -20,13 +20,15 @@ object Pipelines {
         guides: List<CylinderGuides>,
         maxAngleDeg: Float,
         progress: (Float) -> Unit = {},
+        rank: IntArray? = null,
     ): IntArray = Arranger.order(
         photos.indices.map { CylinderUnroller.unroll(photos[it], guides[it], maxAngleDeg).image },
         progress,
+        rank,
     )
 
-    fun arrangePanorama(photos: List<RgbaImage>, hfovDeg: Float, progress: (Float) -> Unit = {}): IntArray =
-        Arranger.order(photos.map { CylindricalProjector.project(it, hfovDeg).image }, progress)
+    fun arrangePanorama(photos: List<RgbaImage>, hfovDeg: Float, progress: (Float) -> Unit = {}, rank: IntArray? = null): IntArray =
+        Arranger.order(photos.map { CylindricalProjector.project(it, hfovDeg).image }, progress, rank)
 
     /**
      * Walk-around photos of a cylinder -> its flattened surface.

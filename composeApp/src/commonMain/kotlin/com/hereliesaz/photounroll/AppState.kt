@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import com.hereliesaz.photounroll.imaging.CylinderGuides
 import com.hereliesaz.photounroll.imaging.EdgeSuggester
+import com.hereliesaz.photounroll.imaging.Exif
 import com.hereliesaz.photounroll.imaging.ImageCodec
 import com.hereliesaz.photounroll.imaging.Pipelines
 import com.hereliesaz.photounroll.imaging.PhotoAdjust
@@ -24,6 +25,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private var nextId = 0L
+
 enum class Mode(val label: String, val action: String) {
     Unroll("UNROLL", "Unroll"),
     Panorama("PANORAMA", "Stitch"),
@@ -35,7 +38,16 @@ enum class Mode(val label: String, val action: String) {
  * what guides, unrolling and stitching see. [fromVideo] frames are already in capture order. [rotatedBitmap] is the rotation alone, the canvas
  * the warp corners are picked on.
  */
-class Photo(val name: String, val original: RgbaImage, guides: CylinderGuides, val fromVideo: Boolean = false) {
+class Photo(
+    val name: String,
+    val original: RgbaImage,
+    guides: CylinderGuides,
+    val fromVideo: Boolean = false,
+    /** EXIF capture time (sortable, see [Exif.captureTime]); an ordering clue. */
+    val taken: Long? = null,
+) {
+    /** Stable list key (thumbnails keep their gesture state while being reordered). */
+    val id: Long = nextId++
     var guides by mutableStateOf(guides)
     var adjust by mutableStateOf(PhotoAdjust())
         internal set
@@ -89,7 +101,7 @@ class AppState(private val scope: CoroutineScope) {
             val bytes = file.readBytes()
             val photo = withContext(Dispatchers.Default) {
                 val img = loadPhoto(bytes)
-                Photo(file.name, img, EdgeSuggester.suggest(img))
+                Photo(file.name, img, EdgeSuggester.suggest(img), taken = Exif.captureTime(bytes))
             }
             photos += photo
         }
@@ -119,22 +131,32 @@ class AppState(private val scope: CoroutineScope) {
 
     /**
      * Reorders the photos by how well their flattened strips overlap, so it no longer matters
-     * what order the picker returned them in. Leaves video frames alone (already in order).
+     * what order the picker returned them in, nudged by metadata (see [metadataRank]).
+     * Leaves video frames alone (already in order).
      */
     fun arrange() = task { arrangeNow(from = 0f) }
+
+    /** Manual reorder (thumbnail drag); the selection follows its photo. */
+    fun move(from: Int, to: Int) {
+        if (from == to || from !in photos.indices || to !in photos.indices) return
+        val keep = current
+        photos.add(to, photos.removeAt(from))
+        selected = photos.indexOf(keep).coerceAtLeast(0)
+    }
 
     private suspend fun arrangeNow(from: Float) {
         if (photos.size < 3 || photos.any { it.fromVideo }) return
         photos.forEach { it.adjustJob?.join() }
         val snapshot = photos.toList()
         val m = mode
+        val rank = metadataRank(snapshot)
         val report: (Float) -> Unit = { progress = from + (1f - from) * it }
         val order = withContext(Dispatchers.Default) {
             when (m) {
                 Mode.Unroll -> Pipelines.arrangeCylinder(
-                    snapshot.map { it.image }, snapshot.map { it.guides }, unrollAngle, report,
+                    snapshot.map { it.image }, snapshot.map { it.guides }, unrollAngle, report, rank,
                 )
-                Mode.Panorama -> Pipelines.arrangePanorama(snapshot.map { it.image }, hfov, report)
+                Mode.Panorama -> Pipelines.arrangePanorama(snapshot.map { it.image }, hfov, report, rank)
             }
         }
         val keep = current
@@ -218,4 +240,21 @@ class AppState(private val scope: CoroutineScope) {
             }
         }
     }
+
+    /**
+     * Metadata order clue: EXIF capture time when every photo has one, else the number in the
+     * file name (IMG_0042) when every name has one, else nothing. Ties keep import order.
+     */
+    private fun metadataRank(ps: List<Photo>): IntArray? {
+        val keys: List<Long> = when {
+            ps.all { it.taken != null } -> ps.map { it.taken!! }
+            else -> ps.map { p -> NUMBER.findAll(p.name).lastOrNull()?.value?.takeLast(18)?.toLong() ?: return null }
+        }
+        if (keys.distinct().size < 2) return null
+        val rank = IntArray(ps.size)
+        ps.indices.sortedBy { keys[it] }.forEachIndexed { r, i -> rank[i] = r }
+        return rank
+    }
+
+    private companion object { val NUMBER = Regex("\\d+") }
 }
