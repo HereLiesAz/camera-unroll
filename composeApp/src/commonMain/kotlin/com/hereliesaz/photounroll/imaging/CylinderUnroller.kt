@@ -3,6 +3,7 @@ package com.hereliesaz.photounroll.imaging
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -22,18 +23,24 @@ class WeightedStrip(
 /**
  * Flattens the visible face of a cylinder.
  *
- * Model: orthographic view, axis vertical in the frame. A surface point at angle θ
- * from the line of sight projects to x = cx + r·sinθ, and its rim rows follow the
- * guide ellipses: y = rimY + bulge·cosθ. Sampling uniformly in θ (not x) is what
- * undoes the foreshortening: each output column is the same arc length, r·dθ.
+ * Axis vertical in the frame. Sampling uniformly in the surface angle θ (not x) is what
+ * undoes the foreshortening: each output column is the same arc length.
+ *
+ * Without a focal length the view is taken as orthographic: x = cx + r·sinθ, rim rows
+ * y = rimY + bulge·cosθ. With one, the camera's distance follows from the silhouette width
+ * (see [Perspective]) and the true pinhole projection is used, which is what lets photos
+ * taken at different distances produce strips of the same scale.
  */
 object CylinderUnroller {
 
     /**
-     * @param maxAngleDeg half-width of the arc to keep. Near 90° the surface is seen
-     *   edge-on and resolution collapses, so 50–70° is the useful range.
+     * @param maxAngleDeg half-width of the arc to keep. Near the silhouette the surface is
+     *   seen edge-on and resolution collapses, so 50–70° is the useful range; with
+     *   [focalPx] it is also held short of the last few degrees the camera can see.
+     * @param focalPx focal length in pixels of [photo]; null for an orthographic view.
      */
-    fun unroll(photo: RgbaImage, guides: CylinderGuides, maxAngleDeg: Float = 60f): WeightedStrip {
+    fun unroll(photo: RgbaImage, guides: CylinderGuides, maxAngleDeg: Float = 60f, focalPx: Float? = null): WeightedStrip {
+        if (focalPx != null) return unrollPerspective(photo, guides, maxAngleDeg, focalPx)
         val g = guides.normalized()
         require(g.isValid) { "Guides do not enclose a cylinder" }
         val w = photo.width.toFloat()
@@ -62,4 +69,44 @@ object CylinderUnroller {
         }
         return WeightedStrip(out, weight)
     }
+
+    private fun unrollPerspective(photo: RgbaImage, guides: CylinderGuides, maxAngleDeg: Float, focalPx: Float): WeightedStrip {
+        val g = guides.normalized()
+        require(g.isValid) { "Guides do not enclose a cylinder" }
+        val w = photo.width.toFloat()
+        val h = photo.height.toFloat()
+        val cx = (g.left + g.right) * w / 2f
+        val d = Perspective.distance((g.right - g.left) * w / 2f, focalPx)
+        val scale = Perspective.frontScale(d, focalPx)
+        val limit = Perspective.tangentAngle(d) - TANGENT_MARGIN
+        val thetaMax = min((maxAngleDeg.coerceIn(5f, 89f) * PI / 180.0).toFloat(), max(0.1f, limit))
+
+        // One output pixel = one source pixel on the surface nearest the camera, both ways.
+        val frontTop = (g.topY + g.topBulge) * h
+        val frontBottom = (g.bottomY + g.bottomBulge) * h
+        val outW = max(2, (2f * scale * thetaMax).roundToInt())
+        val outH = max(2, (frontBottom - frontTop).roundToInt())
+        val out = RgbaImage(outW, outH)
+        val weight = FloatArray(outW)
+
+        for (ox in 0 until outW) {
+            val theta = -thetaMax + (ox + 0.5f) / outW * 2f * thetaMax
+            val c = cos(theta)
+            val sx = cx + focalPx * sin(theta) / (d - c)
+            // Rows shrink toward the horizon as the surface recedes: 1 at the front, D/(D+1) at the tangent.
+            val k = (d + 1f) * (d - 1f) / (d - c)
+            val yTop = (g.topY - d * g.topBulge + g.topBulge * k) * h
+            val yBottom = (g.bottomY - d * g.bottomBulge + g.bottomBulge * k) * h
+            // How squarely the camera sees this column: 1 at the front, 0 at the tangent.
+            weight[ox] = max(0f, (d * c - 1f) / (d - 1f))
+            for (oy in 0 until outH) {
+                val v = (oy + 0.5f) / outH
+                out[ox, oy] = photo.sample(sx, yTop + v * (yBottom - yTop))
+            }
+        }
+        return WeightedStrip(out, weight)
+    }
+
+    /** Stay this far (radians) inside the silhouette, where a pixel covers too much surface. */
+    private const val TANGENT_MARGIN = 0.1f
 }

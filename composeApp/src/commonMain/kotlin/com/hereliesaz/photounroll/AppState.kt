@@ -8,6 +8,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import com.hereliesaz.photounroll.imaging.CylinderGuides
 import com.hereliesaz.photounroll.imaging.EdgeSuggester
 import com.hereliesaz.photounroll.imaging.Exif
+import com.hereliesaz.photounroll.imaging.Leveler
+import com.hereliesaz.photounroll.imaging.Perspective
 import com.hereliesaz.photounroll.imaging.ImageCodec
 import com.hereliesaz.photounroll.imaging.Pipelines
 import com.hereliesaz.photounroll.imaging.PhotoAdjust
@@ -48,6 +50,13 @@ class Photo(
     /** EXIF 35 mm-equivalent focal length; sets how strongly the guessed rims curve. */
     val focal35: Float? = null,
 ) {
+    /** Horizon row (fraction of height) on [image], from [Leveler]; sets how the rims curve. */
+    var horizon = 0.5f
+        internal set
+    /** The rims were detected in the photo rather than placed at the frame's ends. */
+    var rimsSeen = fromVideo
+        internal set
+    val focalPx: Float get() = Perspective.focalPx(focal35, original.width, original.height)
     /** Stable list key (thumbnails keep their gesture state while being reordered). */
     val id: Long = nextId++
     var guides by mutableStateOf(guides)
@@ -96,19 +105,47 @@ class AppState(private val scope: CoroutineScope) {
     /** Ordering is only meaningful for loose photos; video frames arrive in sequence. */
     val canArrange get() = photos.size >= 3 && photos.none { it.fromVideo }
 
-    /** Imports photos, then puts them in capture order (see [arrange]). */
+    /**
+     * Imports photos: each is stood upright ([Leveler]) and given guides, then the set is put
+     * in capture order (see [arrange]) and made to cover the same stretch of the pillar
+     * ([harmonize]), so distance and tilt need not be consistent between shots.
+     */
     fun import(files: List<PlatformFile>) = task {
         files.forEachIndexed { i, file ->
             progress = 0.5f * i / files.size
             val bytes = file.readBytes()
             val photo = withContext(Dispatchers.Default) {
-                val img = loadPhoto(bytes)
-                val focal = Exif.focalLength35(bytes)
-                Photo(file.name, img, EdgeSuggester.suggest(img, focal), taken = Exif.captureTime(bytes), focal35 = focal)
+                Photo(file.name, loadPhoto(bytes), CylinderGuides(), taken = Exif.captureTime(bytes), focal35 = Exif.focalLength35(bytes))
             }
+            detect(photo)
             photos += photo
         }
+        harmonize()
         arrangeNow(from = 0.5f)
+    }
+
+    /** Levels [photo] from scratch and guesses its guides on the leveled image. */
+    private suspend fun detect(photo: Photo) {
+        val level = withContext(Dispatchers.Default) { Leveler.level(photo.original, photo.focal35) }
+        setAdjust(photo, level.adjust)
+        photo.adjustJob?.join()
+        photo.horizon = level.horizon
+        val found = withContext(Dispatchers.Default) { EdgeSuggester.detect(photo.image, photo.focal35, level.horizon) }
+        photo.guides = found.guides
+        photo.rimsSeen = found.rimsSeen
+    }
+
+    /**
+     * Gives every photo whose rims are out of frame the same vertical extent of pillar
+     * (see [Perspective.harmonize]). Photos with visible rims already agree: rim to rim.
+     */
+    private fun harmonize() {
+        val loose = photos.filter { !it.rimsSeen }
+        if (loose.isEmpty() || loose.size != photos.count { !it.fromVideo }) return
+        val out = Perspective.harmonize(
+            loose.map { it.guides }, loose.map { it.image.width to it.image.height }, loose.map { it.focalPx }, loose.map { it.horizon },
+        )
+        loose.forEachIndexed { i, p -> p.guides = out[i] }
     }
 
     /**
@@ -157,7 +194,7 @@ class AppState(private val scope: CoroutineScope) {
         val order = withContext(Dispatchers.Default) {
             when (m) {
                 Mode.Unroll -> Pipelines.arrangeCylinder(
-                    snapshot.map { it.image }, snapshot.map { it.guides }, unrollAngle, report, rank,
+                    snapshot.map { it.image }, snapshot.map { it.guides }, unrollAngle, report, rank, snapshot.map { it.focalPx },
                 )
                 Mode.Panorama -> Pipelines.arrangePanorama(snapshot.map { it.image }, hfov, report, rank)
             }
@@ -170,7 +207,10 @@ class AppState(private val scope: CoroutineScope) {
 
     fun autoGuides() {
         val p = current ?: return
-        task { p.guides = withContext(Dispatchers.Default) { EdgeSuggester.suggest(p.image, p.focal35) } }
+        task {
+            if (p.fromVideo) p.guides = withContext(Dispatchers.Default) { EdgeSuggester.suggest(p.image, p.focal35) }
+            else { detect(p); harmonize() }
+        }
     }
 
     /**
@@ -217,7 +257,7 @@ class AppState(private val scope: CoroutineScope) {
                 val report: (Float) -> Unit = { progress = it }
                 when (m) {
                     Mode.Unroll -> Pipelines.unrollCylinder(
-                        snapshot.map { it.image }, snapshot.map { it.guides }, unrollAngle, fullTurn, trim, report,
+                        snapshot.map { it.image }, snapshot.map { it.guides }, unrollAngle, fullTurn, trim, report, snapshot.map { it.focalPx },
                     )
                     Mode.Panorama -> Pipelines.panorama(snapshot.map { it.image }, hfov, fullTurn, trim, report)
                 }

@@ -10,6 +10,9 @@ class Rendered(val image: RgbaImage, val wraps: Boolean, private val xmp: String
 
 /** The user-facing operations, end to end. CPU-bound; call off the main thread. */
 object Pipelines {
+    /** Vertical slack between hand-held pillar strips, whose placement rests on an estimated horizon. */
+    private const val LOOSE_DY = 0.12f
+
 
     /**
      * Capture order of [photos], recovered from how their flattened strips overlap. Needs the
@@ -21,8 +24,9 @@ object Pipelines {
         maxAngleDeg: Float,
         progress: (Float) -> Unit = {},
         rank: IntArray? = null,
+        focalPx: List<Float?>? = null,
     ): IntArray = Arranger.order(
-        photos.indices.map { CylinderUnroller.unroll(photos[it], guides[it], maxAngleDeg).image },
+        photos.indices.map { CylinderUnroller.unroll(photos[it], guides[it], maxAngleDeg, focalPx?.get(it)).image },
         progress,
         rank,
     )
@@ -32,6 +36,7 @@ object Pipelines {
 
     /**
      * Walk-around photos of a cylinder -> its flattened surface.
+     * @param focalPx per-photo focal length in pixels; enables the perspective unroll.
      * @param trimToTurn the photos are a continuous sequence (video) that may have gone past
      *   one full turn; frames after the first view returns are dropped.
      */
@@ -42,15 +47,16 @@ object Pipelines {
         fullTurn: Boolean,
         trimToTurn: Boolean = false,
         progress: (Float) -> Unit = {},
+        focalPx: List<Float?>? = null,
     ): Rendered {
         require(photos.size == guides.size)
         var strips = photos.indices.map { i ->
             progress(0.3f * i / photos.size)
-            CylinderUnroller.unroll(photos[i], guides[i], maxAngleDeg)
+            CylinderUnroller.unroll(photos[i], guides[i], maxAngleDeg, focalPx?.get(i))
         }
         if (trimToTurn && fullTurn) strips = strips.take(Arranger.framesInOneTurn(strips.map { it.image }))
         val result = if (strips.size == 1) StitchResult(strips[0].image, false, null)
-        else Stitcher.stitch(strips, fullTurn) { progress(0.3f + 0.7f * it) }
+        else Stitcher.stitch(strips, fullTurn, if (focalPx != null) LOOSE_DY else Stitcher.MAX_DY) { progress(0.3f + 0.7f * it) }
         return Rendered(result.image, result.closedLoop, xmp = null)
     }
 
@@ -68,7 +74,7 @@ object Pipelines {
         }
         if (trimToTurn && fullTurn) strips = strips.take(Arranger.framesInOneTurn(strips.map { it.image }))
         val stitched = if (strips.size == 1) StitchResult(strips[0].image, false, strips[0].pxPerRadian)
-        else Stitcher.stitch(strips, fullTurn) { progress(0.3f + 0.6f * it) }
+        else Stitcher.stitch(strips, fullTurn, Stitcher.MAX_DY) { progress(0.3f + 0.6f * it) }
         val ppr = stitched.pxPerRadian ?: strips[0].pxPerRadian!!
         val band = CylindricalProjector.toEquirectangular(stitched.image, ppr)
         progress(1f)

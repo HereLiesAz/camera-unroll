@@ -27,7 +27,12 @@ object Stitcher {
     internal const val MIN_OVERLAP = 0.08f
     internal const val MAX_DY = 0.06f
 
-    fun stitch(input: List<WeightedStrip>, closeLoop: Boolean, progress: (Float) -> Unit = {}): StitchResult {
+    /**
+     * @param maxDy how far (fraction of strip height) neighbors may sit above or below each
+     *   other. Small for a steady sweep; larger when each strip's vertical placement is itself
+     *   an estimate (hand-held photos of a pillar whose ends are out of frame).
+     */
+    fun stitch(input: List<WeightedStrip>, closeLoop: Boolean, maxDy: Float = MAX_DY, progress: (Float) -> Unit = {}): StitchResult {
         require(input.isNotEmpty()) { "Nothing to stitch" }
         val targetH = input.map { it.image.height }.sorted()[input.size / 2]
         var strips = input.map { it.scaledToHeight(targetH) }
@@ -36,9 +41,9 @@ object Stitcher {
         // Capture direction is unknown (walked/turned left or right). An open search
         // votes on it; then every pair is re-aligned with only forward slides allowed,
         // which removes the spurious thin-overlap matches a single pair can produce.
-        val votes = links(strips, loop, forwardOnly = false) { progress(0.4f * it) }
+        val votes = links(strips, loop, forwardOnly = false, maxDy) { progress(0.4f * it) }
         if (votes.count { it.dx < 0f } * 2 > votes.size) strips = strips.reversed()
-        val links = links(strips, loop, forwardOnly = true) { progress(0.4f + 0.4f * it) }
+        val links = links(strips, loop, forwardOnly = true, maxDy) { progress(0.4f + 0.4f * it) }
 
         val n = strips.size
         // Offsets accumulate as floats and are rounded once per strip, so measurement error
@@ -106,20 +111,20 @@ object Stitcher {
     /** Offset of strip b's origin relative to strip a's, in a's pixels. */
     class Link(val dx: Float, val dy: Float)
 
-    private fun links(strips: List<WeightedStrip>, loop: Boolean, forwardOnly: Boolean, progress: (Float) -> Unit): List<Link> {
+    private fun links(strips: List<WeightedStrip>, loop: Boolean, forwardOnly: Boolean, maxDy: Float, progress: (Float) -> Unit): List<Link> {
         val count = if (loop) strips.size else strips.size - 1
         return (0 until count).map { i ->
             progress(i.toFloat() / max(1, count))
-            align(strips[i].image, strips[(i + 1) % strips.size].image, forwardOnly)
+            align(strips[i].image, strips[(i + 1) % strips.size].image, forwardOnly, maxDy)
         }
     }
 
     /** Coarse-to-fine normalized cross-correlation over horizontal and small vertical shifts. */
-    fun align(a: RgbaImage, b: RgbaImage, forwardOnly: Boolean = false): Link {
+    fun align(a: RgbaImage, b: RgbaImage, forwardOnly: Boolean = false, maxDy: Float = MAX_DY): Link {
         val ca = Plane.of(a, COARSE_H)
         val cb = Plane.of(b, COARSE_H)
         val minOv = max(3, (MIN_OVERLAP * min(ca.w, cb.w)).roundToInt())
-        val dyR = max(1, (MAX_DY * COARSE_H).roundToInt())
+        val dyR = max(1, (maxDy * COARSE_H).roundToInt())
         val dxs = if (forwardOnly) 1..(ca.w - minOv) else -(cb.w - minOv)..(ca.w - minOv)
         val coarse = search(ca, cb, dxs, -dyR..dyR)
 

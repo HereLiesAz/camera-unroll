@@ -11,8 +11,7 @@ import kotlin.math.sqrt
  * **Edges** (the usual case: a pillar running out of the frame, any background). The sides of
  * a cylinder are the two longest near-vertical edges with nothing as strong between them.
  * Rims are not visible, so they are placed at the frame's top and bottom and curved as
- * perspective dictates for a level camera: semi-minor = radius × (rim height off the
- * horizon) / focal length.
+ * perspective dictates (see [Perspective.rim]).
  *
  * **Silhouette** (a whole object against a plain background). Separates the object from the
  * background by color distance from the frame border, takes the silhouette's side columns as
@@ -21,29 +20,36 @@ import kotlin.math.sqrt
  * rims inside the frame.
  */
 object EdgeSuggester {
-    private const val WORK_SIZE = 320
+    internal const val WORK_SIZE = 320
 
-    /** Phone main cameras sit around here; used when EXIF has no 35 mm-equivalent focal length. */
-    private const val DEFAULT_FOCAL_35 = 26f
+    /**
+     * @param focal35 35 mm-equivalent focal length from EXIF, if known.
+     * @param horizon row of the horizon as a fraction of the height (0.5 for a level camera).
+     */
+    fun suggest(photo: RgbaImage, focal35: Float? = null, horizon: Float = 0.5f): CylinderGuides =
+        detect(photo, focal35, horizon).guides
 
-    /** @param focal35 35 mm-equivalent focal length from EXIF, if known. */
-    fun suggest(photo: RgbaImage, focal35: Float? = null): CylinderGuides {
+    /** @property rimsSeen the rims were found in the photo, not placed at the frame's ends. */
+    class Suggestion(val guides: CylinderGuides, val rimsSeen: Boolean)
+
+    fun detect(photo: RgbaImage, focal35: Float? = null, horizon: Float = 0.5f): Suggestion =
+        silhouetteOf(photo)?.let { Suggestion(it, true) } ?: Suggestion(framed(photo, focal35, horizon), false)
+
+    private fun silhouetteOf(photo: RgbaImage): CylinderGuides? {
+        val img = photo.scaledToMax(WORK_SIZE)
+        return if (img.width < 16 || img.height < 16) null else silhouette(img)
+    }
+
+    private fun framed(photo: RgbaImage, focal35: Float?, horizon: Float): CylinderGuides {
         val img = photo.scaledToMax(WORK_SIZE)
         if (img.width < 16 || img.height < 16) return CylinderGuides()
-        val sides = sides(img)
-        val whole = silhouette(img)
-        if (whole != null) return whole
-        if (sides == null) return CylinderGuides()
+        val (left, right) = sides(img) ?: return CylinderGuides()
 
-        // Rims off-frame: put each ellipse just inside the frame, curved for a level camera.
-        val (left, right) = sides
-        val focalPx = (focal35?.takeIf { it > 5f } ?: DEFAULT_FOCAL_35) / 43.27f *
-            sqrt((photo.width.toFloat() * photo.width + photo.height.toFloat() * photo.height))
-        val k = (right - left) / 2f * photo.width / focalPx // bulge per unit of height off the horizon
-        val topY = (RIM_MARGIN + 0.5f * k) / (1f + k)
-        val bottomY = (1f - RIM_MARGIN + 0.5f * k) / (1f + k)
-        return CylinderGuides(left, right, topY, k * (topY - 0.5f), bottomY, k * (bottomY - 0.5f))
-            .takeIf { it.isValid } ?: CylinderGuides()
+        // Rims off-frame: put each just inside the frame, curved as the camera's distance dictates.
+        val d = Perspective.distance((right - left) / 2f * photo.width, Perspective.focalPx(focal35, photo.width, photo.height))
+        val (topY, topBulge) = Perspective.rim(RIM_MARGIN, horizon, d)
+        val (bottomY, bottomBulge) = Perspective.rim(1f - RIM_MARGIN, horizon, d)
+        return CylinderGuides(left, right, topY, topBulge, bottomY, bottomBulge).takeIf { it.isValid } ?: CylinderGuides()
     }
 
     private const val RIM_MARGIN = 0.03f
@@ -53,7 +59,7 @@ object EdgeSuggester {
      * long vertical edges stands out. Works on the middle rows, where a pillar is least
      * cluttered by ground and ceiling.
      */
-    private fun sides(img: RgbaImage): Pair<Float, Float>? {
+    internal fun sides(img: RgbaImage): Pair<Float, Float>? {
         val w = img.width
         val h = img.height
         val y0 = h / 5
@@ -103,7 +109,7 @@ object EdgeSuggester {
     }
 
     private const val SOLID = 0.75f
-    private const val GRAD_CAP = 120
+    internal const val GRAD_CAP = 120
     private const val GRAD_REAL = 30
     private const val EDGE_MIN = 6f
 
@@ -176,7 +182,7 @@ object EdgeSuggester {
     }
 
     /** Least squares y = a + k·c, refit once without the worst residuals. */
-    private fun robustFit(c: List<Float>, y: List<Float>): Pair<Float, Float> {
+    internal fun robustFit(c: List<Float>, y: List<Float>): Pair<Float, Float> {
         fun fit(idx: List<Int>): Pair<Float, Float> {
             val n = idx.size.toFloat()
             var sc = 0f; var sy = 0f; var scc = 0f; var scy = 0f

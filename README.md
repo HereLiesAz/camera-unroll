@@ -21,6 +21,16 @@ Both results open in a viewer that drags/flings horizontally and, when closed in
 | Desktop | `ffmpeg` and `ffprobe` on the PATH |
 | iOS | `AVAssetImageGenerator` |
 
+### Automatic pillar, tilt and distance
+
+On import each photo is handled without being asked:
+
+- **Pillar:** the two longest near-vertical edges with nothing as strong between them are its sides, whatever the background. A whole object against a plain background is still found by its silhouette, rims included.
+- **Tilt:** the sides' common lean is the phone's roll and their convergence its pitch; the photo is rotated and warped (visible in **Rotate** / **Warp**) until the pillar stands upright with parallel sides.
+- **Distance:** the pillar's width in frame and the lens (EXIF 35 mm focal length, 26 mm assumed) give the camera's distance. The unroll is a true perspective one, every strip comes out at the same scale, and all photos are given the same stretch of pillar above and below the horizon, so shots taken nearer, farther or tipped differently still line up.
+
+**AUTO-DETECT** redoes this for the current photo. Rims you can't see in frame are placed by geometry, not detected.
+
 ### Automatic order
 
 Photos are put in capture order on import (and by **ORDER**), whatever order the picker returned them in. Each photo is flattened with its guides (or reprojected with the lens FOV), reduced to texture only (shading and contrast evened out), and every pair is correlated at every slide. The strongest chain through all of them wins; a full walk-around closes into a ring that is cut at its weakest seam, then single photos are moved wherever they strengthen the chain. Metadata is a second opinion: EXIF capture time (or, failing that, the number in the file name) adds a small bonus to photos taken consecutively, picks where a ring is cut and which way the strip runs, and is the whole answer when nothing overlaps. Run **ORDER** again after correcting guides. Video frames are never reordered.
