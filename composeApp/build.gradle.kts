@@ -35,7 +35,11 @@ kotlin {
     sourceSets {
         // Skia-backed targets share one codec implementation.
         val skiaMain by creating { dependsOn(commonMain.get()) }
-        val desktopMain by getting { dependsOn(skiaMain) }
+        val desktopMain by getting {
+            dependsOn(skiaMain)
+            // The bundled depth network: one copy on disk, on the classpath here.
+            resources.srcDir("models")
+        }
         iosMain.get().dependsOn(skiaMain)
         wasmJsMain.get().dependsOn(skiaMain)
         // Targets with a real filesystem share the save-dialog implementation.
@@ -52,6 +56,14 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.filekit.dialogs.compose)
         }
+        wasmJsMain {
+            // The same bundled depth network, served beside the page.
+            resources.srcDir("models")
+            dependencies {
+                implementation(npm("onnxruntime-web", "1.20.1"))
+                implementation(devNpm("copy-webpack-plugin", "12.0.2"))
+            }
+        }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
         }
@@ -61,6 +73,7 @@ kotlin {
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.kotlinx.coroutines.swing)
+            implementation(libs.onnxruntime)
         }
     }
 }

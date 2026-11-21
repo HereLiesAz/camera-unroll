@@ -8,7 +8,7 @@ Compose Multiplatform app (Android · iOS · Desktop · Web) that flattens what 
 
 **Panorama** — stand still and turn, overlapping frames by about a third. Frames are reprojected onto a cylinder (set the lens FOV; phone main cameras are ~65–75°), stitched, then mapped to an equirectangular band and saved as JPEG with Photo Sphere (GPano) XMP. Google Photos, Facebook and most 360° viewers wrap it; the in-app viewer scrolls it forever.
 
-Both results open in a viewer that drags/flings horizontally and, when closed into a full turn, never ends.
+Both results open in a viewer that drags/flings horizontally and, when closed into a full turn, never ends. An unrolled pillar also has a **PILLAR** tab: the strip wrapped back onto a cylinder of the pillar's own proportions that you spin by dragging. Only what was photographed is painted (the result line says how far around that is, e.g. `190° of 360°`); the rest is left bare.
 
 ### Video
 
@@ -21,9 +21,34 @@ Both results open in a viewer that drags/flings horizontally and, when closed in
 | Desktop | `ffmpeg` and `ffprobe` on the PATH |
 | iOS | `AVAssetImageGenerator` |
 
+### Guided capture (web)
+
+**CAMERA** opens the rear camera with the pillar's place drawn on the view: a ghost column to fit the real one into. While the pillar is centered, upright enough and the right size, the column turns solid and a ring fills; when it closes, the photo is taken. No shutter. After each photo a bar shows the walk to the next spot (about 30° around; the app compares the live view with the last photo to tell), a plan view of the pillar fills in with what has been covered, and one short line says what to fix (`step back`, `keep walking around`). **DONE** hands the photos to the editor. Tolerances are loose: the unroll corrects lean, tilt and distance by itself. Needs HTTPS and camera permission; other platforms use the picker for now.
+
+### Automatic pillar, tilt and distance
+
+On import each photo is handled without being asked:
+
+- **Pillar:** on the web and desktop, a bundled depth network (Depth Anything V2 Small, Apache-2.0, 27 MB, run locally with ONNX Runtime; nothing leaves the device) turns the photo into a depth image, where the pillar is simply the nearest column: its sides and lean are read from that, whatever its paint, the light or the clutter behind it. Elsewhere (Android, iOS for now), or if the model fails to load, the two longest near-vertical edges with nothing as strong between them are taken as its sides. A whole object against a plain background is still found by its silhouette, rims included.
+- **Tilt:** the sides' common lean is the phone's roll and their convergence its pitch; the photo is rotated and warped (visible in **Rotate** / **Warp**) until the pillar stands upright with parallel sides.
+- **Distance:** the pillar's width in frame and the lens (EXIF 35 mm focal length, 26 mm assumed) give the camera's distance. The unroll is a true perspective one, every strip comes out at the same scale, and all photos are given the same stretch of pillar above and below the horizon, so shots taken nearer, farther or tipped differently still line up.
+
+**AUTO-DETECT** redoes this for the current photo. Rims you can't see in frame are placed by geometry, not detected.
+
 ### Automatic order
 
-Photos are put in capture order on import (and by **ORDER**), whatever order the picker returned them in. Each photo is flattened with its guides (or reprojected with the lens FOV), reduced to texture only (shading and contrast evened out), and every pair is correlated at every slide. The strongest chain through all of them wins; a full walk-around closes into a ring that is cut at its weakest seam, then single photos are moved wherever they strengthen the chain. Run **ORDER** again after correcting guides. Video frames are never reordered.
+Photos are put left to right along the surface on import (and by **ORDER**), whatever order they were taken or picked in. Each is flattened, and every pair is matched (on texture, which lighting cannot fool, backed by plain brightness, which a repeating pattern cannot). The most trustworthy matches that connect everything give each photo a position; sorting by position is the order. Walking back and forth, or shooting the same spot twice, is fine. Capture order breaks ties, and metadata (EXIF time, else the number in the file name) is the whole answer when nothing overlaps. Video frames are never reordered.
+
+### Stitching
+
+- **Placement:** the stitcher finds positions the same way, so it does not depend on the thumbnail order, and it leaves out a photo taken almost where another was.
+- **Second pass:** what still separates neighbors after geometry (a degree of lean, a few percent of size) is measured band by band on the strips and unrolled away.
+- **Registration:** across each overlap the leftover disagreement is measured block by block, and both photos are bent to meet exactly at the cut.
+- **One photo per place:** nothing is averaged. A cut runs through each overlap where the two photos differ least; detail switches photo at the cut, while lighting and color (exposure-matched first) fade across the whole overlap.
+- **Resolution:** the result is rendered from 2400 px copies of the originals with bicubic resampling, at the median photo's scale; editing uses 1600 px copies.
+- **FULL 360°** closes the loop only if the last photo really continues into the first; otherwise the strip is left open.
+
+Drag a thumbnail sideways to reorder by hand. On the web, drop photos or a video anywhere on the page to import them.
 
 ### Rotate and warp
 
@@ -87,5 +112,5 @@ iOS: open an Xcode project at `iosApp/` whose target embeds the `ComposeApp` fra
 
 - Unroll assumes a near-orthographic view with the axis vertical in frame. Shoot from a few diameters away; telephoto beats wide.
 - Stitching aligns by translation only. Keep height and distance constant; vertical drift up to ~6% is absorbed.
-- Order is recovered from content, so photos with no overlap, a plain featureless surface, or a surface with exact repeats (evenly spaced identical stripes) can be misordered; check the thumbnails and fix the guides, then press ORDER.
+- Order is recovered from content, so photos with no overlap, a plain featureless surface, or a surface with exact repeats (evenly spaced identical stripes) can be misordered; check the thumbnails and fix the guides, then press ORDER, or drag the thumbnails into place.
 - Inputs are capped at 1600 px on the long side to stay inside mobile and browser memory.

@@ -19,6 +19,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -48,11 +53,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hereliesaz.photounroll.imaging.PhotoAdjust
+import com.hereliesaz.photounroll.capture.CameraSource
+import com.hereliesaz.photounroll.ui.CaptureScreen
 import com.hereliesaz.photounroll.ui.GuideEditor
 import com.hereliesaz.photounroll.ui.Ink
 import com.hereliesaz.photounroll.ui.MIN_TARGET_DP
 import com.hereliesaz.photounroll.ui.PhotoUnrollTheme
 import com.hereliesaz.photounroll.ui.RotatePreview
+import com.hereliesaz.photounroll.ui.PillarViewer
 import com.hereliesaz.photounroll.ui.StripViewer
 import com.hereliesaz.photounroll.ui.WarpEditor
 import com.hereliesaz.photounroll.ui.ZoomableImage
@@ -75,6 +83,7 @@ fun App() = PhotoUnrollTheme {
     val videoPicker = rememberFilePickerLauncher(type = FileKitType.Video, mode = FileKitMode.Single) { file ->
         if (file != null) state.importVideo(file)
     }
+    FileDropEffect(onImages = { state.import(it) }, onVideo = { state.importVideo(it) })
     val save = rememberJpegSaver()
     val addPhotos = { picker.launch() }
     val addVideo = { videoPicker.launch() }
@@ -92,12 +101,17 @@ fun App() = PhotoUnrollTheme {
         state.error?.let { Text("— $it", color = Ink.Smoke, fontSize = 14.sp, modifier = Modifier.padding(vertical = 4.dp)) }
 
         val result = state.result
+        val addShots = { state.capturing = true }
         when {
+            state.capturing -> CaptureScreen(
+                onDone = { shots -> state.capturing = false; state.importShots(shots) },
+                modifier = Modifier.weight(1f),
+            )
             result != null -> ResultView(result, onBack = { state.result = null }, onSave = {
                 scope.launch { save(state.encode(result), result.mode.label.lowercase()) }
             })
-            state.photos.isEmpty() -> Empty(state, addPhotos, addVideo, Modifier.weight(1f))
-            else -> Editor(state, addPhotos, addVideo, Modifier.weight(1f))
+            state.photos.isEmpty() -> Empty(state, addPhotos, addVideo, addShots, Modifier.weight(1f))
+            else -> Editor(state, addPhotos, addVideo, addShots, Modifier.weight(1f))
         }
     }
 }
@@ -134,7 +148,7 @@ private fun ModeTabs(state: AppState) {
 }
 
 @Composable
-private fun Empty(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, modifier: Modifier) {
+private fun Empty(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit, modifier: Modifier) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             when (state.mode) {
@@ -151,6 +165,8 @@ private fun Empty(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             BigButton("PHOTOS", enabled = !state.busy, onClick = addPhotos)
             BigButton("VIDEO", enabled = !state.busy, onClick = addVideo)
+            // Guided capture walks the photographer around a pillar; a panorama has none.
+            if (state.mode == Mode.Unroll && CameraSource.available) BigButton("CAMERA", enabled = !state.busy, onClick = addShots)
         }
     }
 }
@@ -166,7 +182,7 @@ private fun BigButton(label: String, enabled: Boolean = true, modifier: Modifier
 }
 
 @Composable
-private fun Editor(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, modifier: Modifier) {
+private fun Editor(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit, modifier: Modifier) {
     val photo = state.current ?: return
     val haptics = LocalHapticFeedback.current
     val tick = remember(haptics) { { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove) } }
@@ -202,7 +218,7 @@ private fun Editor(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit,
             Hint(state.tool, state.mode)
         }
         Spacer(Modifier.height(8.dp))
-        Thumbnails(state, addPhotos, addVideo)
+        Thumbnails(state, addPhotos, addVideo, addShots)
         Spacer(Modifier.height(4.dp))
 
         when {
@@ -296,11 +312,33 @@ private fun ActionRow(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit) {
+private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit) {
+    // Drag a thumbnail sideways to reorder: it follows the pointer and trades places with a
+    // neighbor once past half a slot. The strip still scrolls from the gaps, add tiles and wheel.
+    var dragging by remember { mutableStateOf<Photo?>(null) }
+    var dragDx by remember { mutableStateOf(0f) }
+    val slot = with(LocalDensity.current) { 88.dp.toPx() }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        itemsIndexed(state.photos) { i, p ->
+        itemsIndexed(state.photos, key = { _, p -> p.id }) { i, p ->
+            val isDragged = dragging === p
             Box(
                 Modifier
+                    .zIndex(if (isDragged) 1f else 0f)
+                    .graphicsLayer { translationX = if (isDragged) dragDx else 0f }
+                    .pointerInput(p, state.busy) {
+                        if (state.busy) return@pointerInput
+                        detectDragGestures(
+                            onDragStart = { dragging = p; dragDx = 0f },
+                            onDragEnd = { dragging = null; dragDx = 0f },
+                            onDragCancel = { dragging = null; dragDx = 0f },
+                        ) { change, delta ->
+                            change.consume()
+                            dragDx += delta.x
+                            val at = state.photos.indexOf(p)
+                            if (dragDx > slot / 2 && at < state.photos.lastIndex) { state.move(at, at + 1); dragDx -= slot }
+                            else if (dragDx < -slot / 2 && at > 0) { state.move(at, at - 1); dragDx += slot }
+                        }
+                    }
                     .size(80.dp)
                     .border(if (i == state.selected) 2.dp else 1.dp, if (i == state.selected) Ink.Bone else Ink.Ash)
                     .clickable { state.selected = i },
@@ -325,6 +363,7 @@ private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> U
         }
         item { AddTile("+ PHOTOS", !state.busy, addPhotos) }
         item { AddTile("+ VIDEO", !state.busy, addVideo) }
+        if (state.mode == Mode.Unroll && CameraSource.available) item { AddTile("+ CAMERA", !state.busy, addShots) }
     }
 }
 
@@ -356,19 +395,36 @@ private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPoin
 
 @Composable
 private fun ResultView(result: Result, onBack: () -> Unit, onSave: () -> Unit) {
+    val arc = result.rendered.arc
+    val heightRadii = result.rendered.heightRadii
+    // The pillar view needs to know how far around the strip goes; a panorama has no pillar.
+    val canWrap = result.mode == Mode.Unroll && arc != null && heightRadii != null
+    var pillar by remember(result) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
+        if (canWrap) Row(Modifier.fillMaxWidth()) {
+            TabLabel("FLAT", !pillar, modifier = Modifier.weight(1f)) { pillar = false }
+            TabLabel("PILLAR", pillar, modifier = Modifier.weight(1f)) { pillar = true }
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            StripViewer(result.bitmap, result.rendered.wraps, Modifier.fillMaxSize())
+            if (pillar && canWrap) PillarViewer(result.bitmap, arc!!, heightRadii!!, Modifier.fillMaxSize())
+            else StripViewer(result.bitmap, result.rendered.wraps, Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.BottomCenter) {
-                Text("drag · pinch or double-tap to zoom", color = Ink.Smoke, fontSize = 12.sp, letterSpacing = 1.sp)
+                Text(
+                    if (pillar) "drag to spin" else "drag · pinch or double-tap to zoom",
+                    color = Ink.Smoke, fontSize = 12.sp, letterSpacing = 1.sp,
+                )
             }
         }
         Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack, modifier = Modifier.heightIn(min = 56.dp)) { Text("BACK", fontSize = 15.sp) }
             Spacer(Modifier.weight(1f))
             Text(
-                "${result.rendered.image.width}×${result.rendered.image.height}" +
-                    if (result.rendered.wraps) "  ·  seamless" else "",
+                "${result.rendered.image.width}×${result.rendered.image.height}" + when {
+                    result.rendered.wraps -> "  ·  seamless"
+                    // Not all the way around: say how far, so a missing side is no surprise.
+                    canWrap -> "  ·  ${(arc!! * 180f / kotlin.math.PI.toFloat()).roundToInt()}° of 360°"
+                    else -> ""
+                },
                 color = Ink.Smoke,
                 style = MaterialTheme.typography.bodySmall,
             )
