@@ -58,6 +58,56 @@ class RgbaImage(val width: Int, val height: Int, val pixels: IntArray = IntArray
         return out
     }
 
+    /**
+     * Like [sample] but bicubic (Catmull-Rom): keeps edges crisp where bilinear softens them.
+     * For the resampling that makes the final image; previews can stay bilinear.
+     */
+    fun sampleCubic(x: Float, y: Float): Int {
+        val fx = x - 0.5f
+        val fy = y - 0.5f
+        if (fx < -0.5f || fy < -0.5f || fx > width - 0.5f || fy > height - 0.5f) return 0
+        val x1 = floor(fx).toInt()
+        val y1 = floor(fy).toInt()
+        val tx = fx - x1
+        val ty = fy - y1
+        val wx = cubicWeights(tx)
+        val wy = cubicWeights(ty)
+        var a = 0f; var r = 0f; var g = 0f; var b = 0f
+        for (j in 0 until 4) {
+            val row = (y1 - 1 + j).coerceIn(0, height - 1) * width
+            var ra = 0f; var rr = 0f; var rg = 0f; var rb = 0f
+            for (i in 0 until 4) {
+                val p = pixels[row + (x1 - 1 + i).coerceIn(0, width - 1)]
+                val k = wx[i]
+                ra += k * (p ushr 24); rr += k * ((p shr 16) and 0xFF); rg += k * ((p shr 8) and 0xFF); rb += k * (p and 0xFF)
+            }
+            a += wy[j] * ra; r += wy[j] * rr; g += wy[j] * rg; b += wy[j] * rb
+        }
+        fun c(v: Float) = v.roundToInt().coerceIn(0, 255)
+        return (c(a) shl 24) or (c(r) shl 16) or (c(g) shl 8) or c(b)
+    }
+
+    private fun cubicWeights(t: Float): FloatArray {
+        val t2 = t * t
+        val t3 = t2 * t
+        return floatArrayOf(
+            0.5f * (-t3 + 2f * t2 - t),
+            0.5f * (3f * t3 - 5f * t2 + 2f),
+            0.5f * (-3f * t3 + 4f * t2 + t),
+            0.5f * (t3 - t2),
+        )
+    }
+
+    /** The [w]×[h] rectangle at ([x0], [y0]); parts outside the image are transparent. */
+    fun crop(x0: Int, y0: Int, w: Int, h: Int): RgbaImage {
+        val out = RgbaImage(w, h)
+        for (y in max(0, -y0) until min(h, height - y0)) {
+            val from = (y + y0) * width
+            for (x in max(0, -x0) until min(w, width - x0)) out.pixels[y * w + x] = pixels[from + x + x0]
+        }
+        return out
+    }
+
     /** Copy whose longest side is at most [maxDim]; returns this when already small enough. */
     fun scaledToMax(maxDim: Int): RgbaImage {
         val longest = max(width, height)

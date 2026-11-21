@@ -22,8 +22,11 @@ data class PhotoAdjust(
     val isIdentity: Boolean
         get() = abs(rotationDeg % 360f) < 0.01f && quad.zip(FULL_FRAME).all { (a, b) -> abs(a.x - b.x) < 1e-4f && abs(a.y - b.y) < 1e-4f }
 
-    /** Single resample: output pixel -> warp quad -> un-rotate -> source. */
-    fun apply(src: RgbaImage): RgbaImage {
+    /**
+     * Single resample: output pixel -> warp quad -> un-rotate -> source.
+     * @param sharp bicubic instead of bilinear: slower, for the final render rather than previews.
+     */
+    fun apply(src: RgbaImage, sharp: Boolean = false): RgbaImage {
         if (isIdentity) return src
         val w = src.width.toFloat()
         val h = src.height.toFloat()
@@ -41,7 +44,9 @@ data class PhotoAdjust(
                 // p lies on the rotated photo; rotate back by -angle to read the source.
                 val dx = p.x - cx
                 val dy = p.y - cy
-                out[ox, oy] = src.sample(cx + dx * c - dy * s, cy + dx * s + dy * c)
+                val sx = cx + dx * c - dy * s
+                val sy = cy + dx * s + dy * c
+                out[ox, oy] = if (sharp) src.sampleCubic(sx, sy) else src.sample(sx, sy)
             }
         }
         return out

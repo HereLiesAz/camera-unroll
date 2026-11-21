@@ -49,6 +49,8 @@ class Photo(
     val taken: Long? = null,
     /** EXIF 35 mm-equivalent focal length; sets how strongly the guessed rims curve. */
     val focal35: Float? = null,
+    /** The file as imported. Editing works on a reduced copy; the final render decodes this again, larger. */
+    val source: ByteArray? = null,
 ) {
     /** Horizon row (fraction of height) on [image], from [Leveler]; sets how the rims curve. */
     var horizon = 0.5f
@@ -115,7 +117,7 @@ class AppState(private val scope: CoroutineScope) {
             progress = 0.5f * i / files.size
             val bytes = file.readBytes()
             val photo = withContext(Dispatchers.Default) {
-                Photo(file.name, loadPhoto(bytes), CylinderGuides(), taken = Exif.captureTime(bytes), focal35 = Exif.focalLength35(bytes))
+                Photo(file.name, loadPhoto(bytes), CylinderGuides(), taken = Exif.captureTime(bytes), focal35 = Exif.focalLength35(bytes), source = bytes)
             }
             detect(photo)
             photos += photo
@@ -256,9 +258,18 @@ class AppState(private val scope: CoroutineScope) {
             val rendered = withContext(Dispatchers.Default) {
                 val report: (Float) -> Unit = { progress = it }
                 when (m) {
-                    Mode.Unroll -> Pipelines.unrollCylinder(
-                        snapshot.map { it.image }, snapshot.map { it.guides }, unrollAngle, fullTurn, trim, report, snapshot.map { it.focalPx },
-                    )
+                    Mode.Unroll -> {
+                        // The result is made from larger, sharper copies than the ones edited on
+                        // screen; guides and adjustments are fractions of the frame, so they carry over.
+                        val full = snapshot.mapIndexed { i, p ->
+                            report(0.2f * i / snapshot.size)
+                            p.source?.let { p.adjust.apply(loadPhoto(it, FINAL_MAX_DIM), sharp = true) } ?: p.image
+                        }
+                        Pipelines.unrollCylinder(
+                            full, snapshot.map { it.guides }, unrollAngle, fullTurn, trim, { report(0.2f + 0.8f * it) },
+                            full.indices.map { Perspective.focalPx(snapshot[it].focal35, full[it].width, full[it].height) },
+                        )
+                    }
                     Mode.Panorama -> Pipelines.panorama(snapshot.map { it.image }, hfov, fullTurn, trim, report)
                 }
             }
@@ -299,5 +310,9 @@ class AppState(private val scope: CoroutineScope) {
         return rank
     }
 
-    private companion object { val NUMBER = Regex("\\d+") }
+    private companion object {
+        /** Longest side of the photos the final unroll is rendered from. */
+        const val FINAL_MAX_DIM = 2400
+        val NUMBER = Regex("\\d+")
+    }
 }

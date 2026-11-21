@@ -33,7 +33,16 @@ On import each photo is handled without being asked:
 
 ### Automatic order
 
-Photos are put in capture order on import (and by **ORDER**), whatever order the picker returned them in. Each photo is flattened with its guides (or reprojected with the lens FOV), reduced to texture only (shading and contrast evened out), and every pair is correlated at every slide. The strongest chain through all of them wins; a full walk-around closes into a ring that is cut at its weakest seam, then single photos are moved wherever they strengthen the chain. Metadata is a second opinion: EXIF capture time (or, failing that, the number in the file name) adds a small bonus to photos taken consecutively, picks where a ring is cut and which way the strip runs, and is the whole answer when nothing overlaps. Run **ORDER** again after correcting guides. Video frames are never reordered.
+Photos are put left to right along the surface on import (and by **ORDER**), whatever order they were taken or picked in. Each is flattened, and every pair is matched (on texture, which lighting cannot fool, backed by plain brightness, which a repeating pattern cannot). The most trustworthy matches that connect everything give each photo a position; sorting by position is the order. Walking back and forth, or shooting the same spot twice, is fine. Capture order breaks ties, and metadata (EXIF time, else the number in the file name) is the whole answer when nothing overlaps. Video frames are never reordered.
+
+### Stitching
+
+- **Placement:** the stitcher finds positions the same way, so it does not depend on the thumbnail order, and it leaves out a photo taken almost where another was.
+- **Second pass:** what still separates neighbors after geometry (a degree of lean, a few percent of size) is measured band by band on the strips and unrolled away.
+- **Registration:** across each overlap the leftover disagreement is measured block by block, and both photos are bent to meet exactly at the cut.
+- **One photo per place:** nothing is averaged. A cut runs through each overlap where the two photos differ least; detail switches photo at the cut, while lighting and color (exposure-matched first) fade across the whole overlap.
+- **Resolution:** the result is rendered from 2400 px copies of the originals with bicubic resampling, at the median photo's scale; editing uses 1600 px copies.
+- **FULL 360°** closes the loop only if the last photo really continues into the first; otherwise the strip is left open.
 
 Drag a thumbnail sideways to reorder by hand. On the web, drop photos or a video anywhere on the page to import them.
 
