@@ -19,7 +19,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -102,6 +108,16 @@ fun App() = PhotoUnrollTheme {
 
         val result = state.result
         val addShots = { state.capturing = true }
+        // Back steps out of the camera or the result before it leaves the app, and a long
+        // render or a capture in progress keeps the screen awake.
+        BackAction(enabled = state.capturing || result != null || state.busy) {
+            when {
+                state.capturing -> state.capturing = false
+                state.busy -> Unit // leaving mid-render would throw the work away
+                else -> state.result = null
+            }
+        }
+        KeepScreenOn(state.capturing || state.busy)
         when {
             state.capturing -> CaptureScreen(
                 onDone = { shots -> state.capturing = false; state.importShots(shots) },
@@ -314,7 +330,9 @@ private fun ActionRow(content: @Composable () -> Unit) {
 @Composable
 private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit) {
     // Drag a thumbnail sideways to reorder: it follows the pointer and trades places with a
-    // neighbor once past half a slot. The strip still scrolls from the gaps, add tiles and wheel.
+    // neighbor once past half a slot.
+    val haptics = LocalHapticFeedback.current
+    val pickUp = { haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
     var dragging by remember { mutableStateOf<Photo?>(null) }
     var dragDx by remember { mutableStateOf(0f) }
     val slot = with(LocalDensity.current) { 88.dp.toPx() }
@@ -327,16 +345,26 @@ private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> U
                     .graphicsLayer { translationX = if (isDragged) dragDx else 0f }
                     .pointerInput(p, state.busy) {
                         if (state.busy) return@pointerInput
-                        detectDragGestures(
-                            onDragStart = { dragging = p; dragDx = 0f },
-                            onDragEnd = { dragging = null; dragDx = 0f },
-                            onDragCancel = { dragging = null; dragDx = 0f },
-                        ) { change, delta ->
-                            change.consume()
-                            dragDx += delta.x
-                            val at = state.photos.indexOf(p)
-                            if (dragDx > slot / 2 && at < state.photos.lastIndex) { state.move(at, at + 1); dragDx -= slot }
-                            else if (dragDx < -slot / 2 && at > 0) { state.move(at, at - 1); dragDx += slot }
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            // A mouse drags a thumbnail at once. A finger has to be able to
+                            // scroll the strip too, so it picks a thumbnail up by holding it.
+                            val start = if (down.type == PointerType.Touch) awaitLongPressOrCancellation(down.id)
+                            else awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                            if (start != null) {
+                                if (down.type == PointerType.Touch) pickUp()
+                                dragging = p
+                                dragDx = 0f
+                                drag(start.id) { change ->
+                                    dragDx += change.positionChange().x
+                                    change.consume()
+                                    val at = state.photos.indexOf(p)
+                                    if (dragDx > slot / 2 && at < state.photos.lastIndex) { state.move(at, at + 1); dragDx -= slot }
+                                    else if (dragDx < -slot / 2 && at > 0) { state.move(at, at - 1); dragDx += slot }
+                                }
+                                dragging = null
+                                dragDx = 0f
+                            }
                         }
                     }
                     .size(80.dp)

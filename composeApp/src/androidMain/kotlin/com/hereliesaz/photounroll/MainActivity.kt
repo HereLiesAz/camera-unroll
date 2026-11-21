@@ -13,7 +13,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         AppContext.app = applicationContext
+        ActivityHolder.attach(this) // Permission requests and the camera's lifecycle.
         FileKit.init(this) // Save dialog needs an activity result registry.
         setContent { App() }
+    }
+
+    override fun onDestroy() {
+        ActivityHolder.detach(this)
+        super.onDestroy()
     }
 }
