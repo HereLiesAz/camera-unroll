@@ -53,6 +53,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hereliesaz.photounroll.imaging.PhotoAdjust
+import com.hereliesaz.photounroll.capture.CameraSource
+import com.hereliesaz.photounroll.ui.CaptureScreen
 import com.hereliesaz.photounroll.ui.GuideEditor
 import com.hereliesaz.photounroll.ui.Ink
 import com.hereliesaz.photounroll.ui.MIN_TARGET_DP
@@ -99,12 +101,17 @@ fun App() = PhotoUnrollTheme {
         state.error?.let { Text("— $it", color = Ink.Smoke, fontSize = 14.sp, modifier = Modifier.padding(vertical = 4.dp)) }
 
         val result = state.result
+        val addShots = { state.capturing = true }
         when {
+            state.capturing -> CaptureScreen(
+                onDone = { shots -> state.capturing = false; state.importShots(shots) },
+                modifier = Modifier.weight(1f),
+            )
             result != null -> ResultView(result, onBack = { state.result = null }, onSave = {
                 scope.launch { save(state.encode(result), result.mode.label.lowercase()) }
             })
-            state.photos.isEmpty() -> Empty(state, addPhotos, addVideo, Modifier.weight(1f))
-            else -> Editor(state, addPhotos, addVideo, Modifier.weight(1f))
+            state.photos.isEmpty() -> Empty(state, addPhotos, addVideo, addShots, Modifier.weight(1f))
+            else -> Editor(state, addPhotos, addVideo, addShots, Modifier.weight(1f))
         }
     }
 }
@@ -141,7 +148,7 @@ private fun ModeTabs(state: AppState) {
 }
 
 @Composable
-private fun Empty(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, modifier: Modifier) {
+private fun Empty(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit, modifier: Modifier) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             when (state.mode) {
@@ -158,6 +165,8 @@ private fun Empty(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             BigButton("PHOTOS", enabled = !state.busy, onClick = addPhotos)
             BigButton("VIDEO", enabled = !state.busy, onClick = addVideo)
+            // Guided capture walks the photographer around a pillar; a panorama has none.
+            if (state.mode == Mode.Unroll && CameraSource.available) BigButton("CAMERA", enabled = !state.busy, onClick = addShots)
         }
     }
 }
@@ -173,7 +182,7 @@ private fun BigButton(label: String, enabled: Boolean = true, modifier: Modifier
 }
 
 @Composable
-private fun Editor(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, modifier: Modifier) {
+private fun Editor(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit, modifier: Modifier) {
     val photo = state.current ?: return
     val haptics = LocalHapticFeedback.current
     val tick = remember(haptics) { { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove) } }
@@ -209,7 +218,7 @@ private fun Editor(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit,
             Hint(state.tool, state.mode)
         }
         Spacer(Modifier.height(8.dp))
-        Thumbnails(state, addPhotos, addVideo)
+        Thumbnails(state, addPhotos, addVideo, addShots)
         Spacer(Modifier.height(4.dp))
 
         when {
@@ -303,7 +312,7 @@ private fun ActionRow(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit) {
+private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit) {
     // Drag a thumbnail sideways to reorder: it follows the pointer and trades places with a
     // neighbor once past half a slot. The strip still scrolls from the gaps, add tiles and wheel.
     var dragging by remember { mutableStateOf<Photo?>(null) }
@@ -354,6 +363,7 @@ private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> U
         }
         item { AddTile("+ PHOTOS", !state.busy, addPhotos) }
         item { AddTile("+ VIDEO", !state.busy, addVideo) }
+        if (state.mode == Mode.Unroll && CameraSource.available) item { AddTile("+ CAMERA", !state.busy, addShots) }
     }
 }
 

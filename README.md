@@ -21,6 +21,10 @@ Both results open in a viewer that drags/flings horizontally and, when closed in
 | Desktop | `ffmpeg` and `ffprobe` on the PATH |
 | iOS | `AVAssetImageGenerator` |
 
+### Guided capture (web)
+
+**CAMERA** opens the rear camera with the pillar's place drawn on the view: a ghost column to fit the real one into. While the pillar is centered, upright enough and the right size, the column turns solid and a ring fills; when it closes, the photo is taken. No shutter. After each photo a bar shows the walk to the next spot (about 30° around; the app compares the live view with the last photo to tell), a plan view of the pillar fills in with what has been covered, and one short line says what to fix (`step back`, `keep walking around`). **DONE** hands the photos to the editor. Tolerances are loose: the unroll corrects lean, tilt and distance by itself. Needs HTTPS and camera permission; other platforms use the picker for now.
+
 ### Automatic pillar, tilt and distance
 
 On import each photo is handled without being asked:

@@ -114,11 +114,22 @@ class AppState(private val scope: CoroutineScope) {
      * ([harmonize]), so distance and tilt need not be consistent between shots.
      */
     fun import(files: List<PlatformFile>) = task {
-        files.forEachIndexed { i, file ->
-            progress = 0.5f * i / files.size
-            val bytes = file.readBytes()
+        ingest(files.size) { i -> files[i].name to files[i].readBytes() }
+    }
+
+    /** Imports photos taken by guided capture (JPEG bytes, in the order taken). */
+    fun importShots(shots: List<ByteArray>) {
+        if (shots.isEmpty()) return
+        val first = photos.size + 1
+        task { ingest(shots.size) { i -> "shot ${first + i}" to shots[i] } }
+    }
+
+    private suspend fun ingest(count: Int, read: suspend (Int) -> Pair<String, ByteArray>) {
+        for (i in 0 until count) {
+            progress = 0.5f * i / count
+            val (name, bytes) = read(i)
             val photo = withContext(Dispatchers.Default) {
-                Photo(file.name, loadPhoto(bytes), CylinderGuides(), taken = Exif.captureTime(bytes), focal35 = Exif.focalLength35(bytes), source = bytes)
+                Photo(name, loadPhoto(bytes), CylinderGuides(), taken = Exif.captureTime(bytes), focal35 = Exif.focalLength35(bytes), source = bytes)
             }
             detect(photo)
             photos += photo
@@ -126,6 +137,9 @@ class AppState(private val scope: CoroutineScope) {
         harmonize()
         arrangeNow(from = 0.5f)
     }
+
+    /** The guided-capture camera is open in place of the editor. */
+    var capturing by mutableStateOf(false)
 
     /** Levels [photo] from scratch and guesses its guides on the leveled image. */
     private suspend fun detect(photo: Photo) {
