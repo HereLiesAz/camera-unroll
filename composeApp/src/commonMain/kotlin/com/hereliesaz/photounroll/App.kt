@@ -58,6 +58,7 @@ import com.hereliesaz.photounroll.ui.Ink
 import com.hereliesaz.photounroll.ui.MIN_TARGET_DP
 import com.hereliesaz.photounroll.ui.PhotoUnrollTheme
 import com.hereliesaz.photounroll.ui.RotatePreview
+import com.hereliesaz.photounroll.ui.PillarViewer
 import com.hereliesaz.photounroll.ui.StripViewer
 import com.hereliesaz.photounroll.ui.WarpEditor
 import com.hereliesaz.photounroll.ui.ZoomableImage
@@ -384,19 +385,36 @@ private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPoin
 
 @Composable
 private fun ResultView(result: Result, onBack: () -> Unit, onSave: () -> Unit) {
+    val arc = result.rendered.arc
+    val heightRadii = result.rendered.heightRadii
+    // The pillar view needs to know how far around the strip goes; a panorama has no pillar.
+    val canWrap = result.mode == Mode.Unroll && arc != null && heightRadii != null
+    var pillar by remember(result) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
+        if (canWrap) Row(Modifier.fillMaxWidth()) {
+            TabLabel("FLAT", !pillar, modifier = Modifier.weight(1f)) { pillar = false }
+            TabLabel("PILLAR", pillar, modifier = Modifier.weight(1f)) { pillar = true }
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            StripViewer(result.bitmap, result.rendered.wraps, Modifier.fillMaxSize())
+            if (pillar && canWrap) PillarViewer(result.bitmap, arc!!, heightRadii!!, Modifier.fillMaxSize())
+            else StripViewer(result.bitmap, result.rendered.wraps, Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.BottomCenter) {
-                Text("drag · pinch or double-tap to zoom", color = Ink.Smoke, fontSize = 12.sp, letterSpacing = 1.sp)
+                Text(
+                    if (pillar) "drag to spin" else "drag · pinch or double-tap to zoom",
+                    color = Ink.Smoke, fontSize = 12.sp, letterSpacing = 1.sp,
+                )
             }
         }
         Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack, modifier = Modifier.heightIn(min = 56.dp)) { Text("BACK", fontSize = 15.sp) }
             Spacer(Modifier.weight(1f))
             Text(
-                "${result.rendered.image.width}×${result.rendered.image.height}" +
-                    if (result.rendered.wraps) "  ·  seamless" else "",
+                "${result.rendered.image.width}×${result.rendered.image.height}" + when {
+                    result.rendered.wraps -> "  ·  seamless"
+                    // Not all the way around: say how far, so a missing side is no surprise.
+                    canWrap -> "  ·  ${(arc!! * 180f / kotlin.math.PI.toFloat()).roundToInt()}° of 360°"
+                    else -> ""
+                },
                 color = Ink.Smoke,
                 style = MaterialTheme.typography.bodySmall,
             )

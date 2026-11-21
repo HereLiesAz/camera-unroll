@@ -8,7 +8,7 @@ Compose Multiplatform app (Android · iOS · Desktop · Web) that flattens what 
 
 **Panorama** — stand still and turn, overlapping frames by about a third. Frames are reprojected onto a cylinder (set the lens FOV; phone main cameras are ~65–75°), stitched, then mapped to an equirectangular band and saved as JPEG with Photo Sphere (GPano) XMP. Google Photos, Facebook and most 360° viewers wrap it; the in-app viewer scrolls it forever.
 
-Both results open in a viewer that drags/flings horizontally and, when closed into a full turn, never ends.
+Both results open in a viewer that drags/flings horizontally and, when closed into a full turn, never ends. An unrolled pillar also has a **PILLAR** tab: the strip wrapped back onto a cylinder of the pillar's own proportions that you spin by dragging. Only what was photographed is painted (the result line says how far around that is, e.g. `190° of 360°`); the rest is left bare.
 
 ### Video
 

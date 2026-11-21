@@ -1,7 +1,23 @@
 package com.hereliesaz.photounroll.imaging
 
-/** Finished render: pixels to show, plus how to write them out. */
-class Rendered(val image: RgbaImage, val wraps: Boolean, private val xmp: String?) {
+/**
+ * Finished render: pixels to show, plus how to write them out.
+ * @property pxPerRadian horizontal pixels per radian of the subject's surface, when known
+ *   (an unrolled pillar); for a pillar this is also pixels per radius, so it gives its shape.
+ */
+class Rendered(val image: RgbaImage, val wraps: Boolean, private val xmp: String?, val pxPerRadian: Float? = null) {
+    /** Radians of the way around the subject the image covers; a full turn when it [wraps]. */
+    val arc: Float?
+        get() = if (wraps) (2 * kotlin.math.PI).toFloat() else pxPerRadian?.let { kotlin.math.min((2 * kotlin.math.PI).toFloat(), image.width / it) }
+
+    /** Height of the image in subject radii. */
+    val heightRadii: Float?
+        get() = when {
+            pxPerRadian != null -> image.height / pxPerRadian
+            wraps -> image.height / (image.width / (2 * kotlin.math.PI).toFloat())
+            else -> null
+        }
+
     fun toJpeg(quality: Int = 92): ByteArray {
         val jpeg = ImageCodec.encodeJpeg(image, quality)
         return if (xmp == null) jpeg else PanoramaXmp.inject(jpeg, xmp)
@@ -68,7 +84,14 @@ object Pipelines {
         if (trimToTurn && fullTurn) strips = strips.take(Arranger.framesInOneTurn(strips.map { it.image }))
         val result = if (strips.size == 1) StitchResult(strips[0].image, false, null)
         else Stitcher.stitch(strips, fullTurn, Stitcher.MAX_DY) { progress(0.3f + 0.7f * it) }
-        return Rendered(result.image, result.closedLoop, xmp = null)
+        // Strips are uniform in surface angle; their scale survives stitching (same-height strips
+        // are pasted, not resized), so the result's width says how far around it goes.
+        val ppr = scale ?: run {
+            val h = strips.map { it.image.height }.sorted()[strips.size / 2]
+            val theta = (maxAngleDeg.coerceIn(5f, 89f) * kotlin.math.PI / 180.0).toFloat()
+            strips.map { it.image.width / (2f * theta) * h / it.image.height }.sorted()[strips.size / 2]
+        }
+        return Rendered(result.image, result.closedLoop, xmp = null, pxPerRadian = ppr)
     }
 
     /** Photos taken turning in place -> equirectangular band with Photo Sphere metadata. */
