@@ -56,6 +56,14 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.filekit.dialogs.compose)
         }
+        wasmJsMain {
+            // The same bundled depth network, served beside the page.
+            resources.srcDir("models")
+            dependencies {
+                implementation(npm("onnxruntime-web", "1.20.1"))
+                implementation(devNpm("copy-webpack-plugin", "12.0.2"))
+            }
+        }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
         }

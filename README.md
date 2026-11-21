@@ -25,7 +25,7 @@ Both results open in a viewer that drags/flings horizontally and, when closed in
 
 On import each photo is handled without being asked:
 
-- **Pillar:** the two longest near-vertical edges with nothing as strong between them are its sides, whatever the background. A whole object against a plain background is still found by its silhouette, rims included.
+- **Pillar:** on the web and desktop, a bundled depth network (Depth Anything V2 Small, Apache-2.0, 27 MB, run locally with ONNX Runtime; nothing leaves the device) turns the photo into a depth image, where the pillar is simply the nearest column: its sides and lean are read from that, whatever its paint, the light or the clutter behind it. Elsewhere (Android, iOS for now), or if the model fails to load, the two longest near-vertical edges with nothing as strong between them are taken as its sides. A whole object against a plain background is still found by its silhouette, rims included.
 - **Tilt:** the sides' common lean is the phone's roll and their convergence its pitch; the photo is rotated and warped (visible in **Rotate** / **Warp**) until the pillar stands upright with parallel sides.
 - **Distance:** the pillar's width in frame and the lens (EXIF 35 mm focal length, 26 mm assumed) give the camera's distance. The unroll is a true perspective one, every strip comes out at the same scale, and all photos are given the same stretch of pillar above and below the horizon, so shots taken nearer, farther or tipped differently still line up.
 
