@@ -288,3 +288,72 @@ class ArrangeTest {
         assertEquals(total, Arranger.framesInOneTurn(strips))
     }
 }
+
+class PerspectiveTest {
+    @Test
+    fun distanceFollowsFromWidthAndFocalLength() {
+        // Camera 5 radii from the axis: the silhouette's half-width is f / sqrt(D² - 1).
+        val f = 1000f
+        val half = f / kotlin.math.sqrt(24f)
+        assertTrue(abs(Perspective.distance(half, f) - 5f) < 1e-3f)
+        assertTrue(abs(Perspective.frontScale(5f, f) - 250f) < 1e-3f)
+    }
+
+    @Test
+    fun rimIsFlatOnTheHorizonAndBulgesAwayFromIt() {
+        val (y0, b0) = Perspective.rim(0.5f, 0.5f, 4f)
+        assertTrue(abs(y0 - 0.5f) < 1e-6f && abs(b0) < 1e-6f)
+        val (yTop, bTop) = Perspective.rim(0.1f, 0.5f, 4f)
+        val (yBottom, bBottom) = Perspective.rim(0.9f, 0.5f, 4f)
+        assertTrue(bTop < 0f && bBottom > 0f, "top bulges up, bottom down")
+        assertTrue(abs(yTop + bTop - 0.1f) < 1e-6f && abs(yBottom + bBottom - 0.9f) < 1e-6f, "front of each rim is where asked")
+    }
+
+    @Test
+    fun harmonizeGivesNearAndFarPhotosTheSameStretchOfPillar() {
+        // Same pillar, one photo taken closer (wider in frame). After harmonizing, the rims'
+        // front rows span the same number of pillar radii in both.
+        val size = 1200 to 1600
+        val f = Perspective.focalPx(26f, size.first, size.second)
+        val guides = listOf(CylinderGuides(0.3f, 0.7f), CylinderGuides(0.38f, 0.62f))
+        val out = Perspective.harmonize(guides, listOf(size, size), listOf(f, f), listOf(0.5f, 0.5f))
+        fun radii(g: CylinderGuides): Float {
+            val d = Perspective.distance((g.right - g.left) / 2f * size.first, f)
+            return ((g.bottomY + g.bottomBulge) - (g.topY + g.topBulge)) * size.second / Perspective.frontScale(d, f)
+        }
+        assertTrue(abs(radii(out[0]) - radii(out[1])) < 0.02f, "${radii(out[0])} vs ${radii(out[1])}")
+        assertEquals(guides[0].left, out[0].left)
+    }
+}
+
+class DepthSidesTest {
+    /** A leaning bright column on a dark ground, with a blob of equal depth at its foot. */
+    private fun depth(lean: Float): RgbaImage {
+        val w = 280; val h = 392
+        return RgbaImage(w, h, IntArray(w * h) { i ->
+            val x = i % w; val y = i / w
+            val cx = 140f + lean * (y - h / 2f)
+            val g = when {
+                abs(x - cx) < 45f -> 235 - (abs(x - cx) / 45f * 25f).toInt() // round surface: gently darker to the sides
+                y > 330 && x in 60..230 -> 230 // plants against the foot
+                else -> 30 + y / 10
+            }
+            (0xFF shl 24) or (g shl 16) or (g shl 8) or g
+        })
+    }
+
+    @Test
+    fun findsSidesAndLeanDespiteClutterAtTheFoot() {
+        val s = DepthSides.measure(depth(0.03f))!!
+        assertTrue(abs(s.leftAt - 95f) < 3f, "left ${s.leftAt}")
+        assertTrue(abs(s.rightAt - 185f) < 3f, "right ${s.rightAt}")
+        assertTrue(abs(s.lean - 0.03f) < 0.006f, "lean ${s.lean}")
+        assertTrue(abs(s.spread) < 0.006f, "spread ${s.spread}")
+    }
+
+    @Test
+    fun nothingNearMeansNoPillar() {
+        val flat = RgbaImage(280, 392, IntArray(280 * 392) { 0xFF202020.toInt() })
+        assertEquals(null, DepthSides.measure(flat))
+    }
+}

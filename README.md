@@ -21,9 +21,22 @@ Both results open in a viewer that drags/flings horizontally and, when closed in
 | Desktop | `ffmpeg` and `ffprobe` on the PATH |
 | iOS | `AVAssetImageGenerator` |
 
-### Guided capture (web)
+### Guided capture (web, Android)
 
-**CAMERA** opens the rear camera with the pillar's place drawn on the view: a ghost column to fit the real one into. While the pillar is centered, upright enough and the right size, the column turns solid and a ring fills; when it closes, the photo is taken. No shutter. After each photo a bar shows the walk to the next spot (about 30° around; the app compares the live view with the last photo to tell), a plan view of the pillar fills in with what has been covered, and one short line says what to fix (`step back`, `keep walking around`). **DONE** hands the photos to the editor. Tolerances are loose: the unroll corrects lean, tilt and distance by itself. Needs HTTPS and camera permission; other platforms use the picker for now.
+**CAMERA** opens the rear camera with the pillar's place drawn on the view: a ghost column to fit the real one into. While the pillar is centered, upright enough and the right size, the column turns solid and a ring fills; when it closes, the photo is taken. No shutter. After each photo a bar shows the walk to the next spot (about 30° around; the app compares the live view with the last photo to tell), a plan view of the pillar fills in with what has been covered, and one short line says what to fix (`step back`, `keep walking around`). **DONE** hands the photos to the editor. Tolerances are loose: the unroll corrects lean, tilt and distance by itself.
+
+- **Web:** needs HTTPS and camera permission; photos are frames of the video stream.
+- **Android:** CameraX; asks for the camera when first used; photos are real full-resolution stills with EXIF, so the lens's focal length is known.
+- Desktop and iOS use the picker for now.
+
+### Android
+
+Depth Anything runs on-device through ONNX Runtime (the model ships in the APK's assets). Working sizes are smaller than on desktop (1280 px to edit, 2000 px for the result), photos are decoded at reduced size straight from the file, and a render that runs out of memory is redone from the smaller copies instead of failing. Back steps out of the camera or the result; the screen stays on while capturing or rendering. On touch, hold a thumbnail to pick it up and reorder (a plain drag scrolls the strip); with a mouse, drag it straight away.
+
+~~~
+./gradlew :composeApp:assembleDebug     # installable, debug-signed
+./gradlew :composeApp:assembleRelease   # shrunk with R8; unsigned until a signing config is added
+~~~
 
 ### Automatic pillar, tilt and distance
 
@@ -48,7 +61,7 @@ Photos are put left to right along the surface on import (and by **ORDER**), wha
 - **Resolution:** the result is rendered from 2400 px copies of the originals with bicubic resampling, at the median photo's scale; editing uses 1600 px copies.
 - **FULL 360°** closes the loop only if the last photo really continues into the first; otherwise the strip is left open.
 
-Drag a thumbnail sideways to reorder by hand. On the web, drop photos or a video anywhere on the page to import them.
+Drag a thumbnail sideways to reorder by hand (on touch, hold it first). On the web, drop photos or a video anywhere on the page to import them.
 
 ### Rotate and warp
 

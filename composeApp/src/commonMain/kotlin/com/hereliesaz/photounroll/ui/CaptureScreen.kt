@@ -126,7 +126,7 @@ fun CaptureScreen(onDone: (List<ByteArray>) -> Unit, modifier: Modifier = Modifi
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             val bmp = frame
             if (failed) {
-                Text("The camera is not available.\nAllow it for this page, or add photos instead.", color = Ink.Smoke, lineHeight = 22.sp)
+                Text("The camera is not available.\nAllow camera access, or add photos instead.", color = Ink.Smoke, lineHeight = 22.sp)
             } else if (bmp != null) {
                 Canvas(Modifier.fillMaxSize()) {
                     // The live view, fitted whole.

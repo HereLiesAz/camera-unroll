@@ -11,7 +11,7 @@ import org.jetbrains.skia.ImageInfo
 
 /** Desktop, iOS and Web all render through Skia, so they share this codec. */
 actual object ImageCodec {
-    actual fun decode(bytes: ByteArray): RgbaImage {
+    actual fun decode(bytes: ByteArray, atLeast: Int): RgbaImage {
         val image = Image.makeFromEncoded(bytes)
         val bitmap = Bitmap()
         bitmap.allocPixels(info(image.width, image.height))

@@ -129,7 +129,7 @@ class AppState(private val scope: CoroutineScope) {
             progress = 0.5f * i / count
             val (name, bytes) = read(i)
             val photo = withContext(Dispatchers.Default) {
-                Photo(name, loadPhoto(bytes), CylinderGuides(), taken = Exif.captureTime(bytes), focal35 = Exif.focalLength35(bytes), source = bytes)
+                Photo(name, loadPhoto(bytes, Limits.editMaxDim), CylinderGuides(), taken = Exif.captureTime(bytes), focal35 = Exif.focalLength35(bytes), source = bytes)
             }
             detect(photo)
             photos += photo
@@ -278,16 +278,24 @@ class AppState(private val scope: CoroutineScope) {
                 val report: (Float) -> Unit = { progress = it }
                 when (m) {
                     Mode.Unroll -> {
-                        // The result is made from larger, sharper copies than the ones edited on
-                        // screen; guides and adjustments are fractions of the frame, so they carry over.
-                        val full = snapshot.mapIndexed { i, p ->
-                            report(0.2f * i / snapshot.size)
-                            p.source?.let { p.adjust.apply(loadPhoto(it, FINAL_MAX_DIM), sharp = true) } ?: p.image
-                        }
-                        Pipelines.unrollCylinder(
-                            full, snapshot.map { it.guides }, unrollAngle, fullTurn, trim, { report(0.2f + 0.8f * it) },
+                        fun render(full: List<RgbaImage>, from: Float) = Pipelines.unrollCylinder(
+                            full, snapshot.map { it.guides }, unrollAngle, fullTurn, trim, { report(from + (1f - from) * it) },
                             full.indices.map { Perspective.focalPx(snapshot[it].focal35, full[it].width, full[it].height) },
                         )
+                        try {
+                            // The result is made from larger, sharper copies than the ones edited on
+                            // screen; guides and adjustments are fractions of the frame, so they carry over.
+                            render(
+                                snapshot.mapIndexed { i, p ->
+                                    report(0.2f * i / snapshot.size)
+                                    p.source?.let { p.adjust.apply(loadPhoto(it, Limits.finalMaxDim), sharp = true) } ?: p.image
+                                },
+                                from = 0.2f,
+                            )
+                        } catch (t: OutOfMemoryError) {
+                            // A smaller result beats none: fall back to the copies already in memory.
+                            render(snapshot.map { it.image }, from = 0f)
+                        }
                     }
                     Mode.Panorama -> Pipelines.panorama(snapshot.map { it.image }, hfov, fullTurn, trim, report)
                 }
@@ -306,6 +314,10 @@ class AppState(private val scope: CoroutineScope) {
         job = scope.launch {
             try {
                 block()
+            } catch (t: kotlinx.coroutines.CancellationException) {
+                throw t
+            } catch (t: OutOfMemoryError) {
+                error = "Not enough memory for this many photos. Remove a few and try again."
             } catch (t: Throwable) {
                 error = t.message ?: t.toString()
             } finally {
@@ -330,8 +342,6 @@ class AppState(private val scope: CoroutineScope) {
     }
 
     private companion object {
-        /** Longest side of the photos the final unroll is rendered from. */
-        const val FINAL_MAX_DIM = 2400
         val NUMBER = Regex("\\d+")
     }
 }

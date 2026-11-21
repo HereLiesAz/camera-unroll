@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -69,6 +70,11 @@ kotlin {
         }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
+            implementation(libs.androidx.core)
+            implementation(libs.androidx.camera.core)
+            implementation(libs.androidx.camera.camera2)
+            implementation(libs.androidx.camera.lifecycle)
+            implementation(libs.onnxruntime.android)
         }
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
@@ -78,6 +84,10 @@ kotlin {
     }
 }
 
+// One version for every target, kept in version.properties at the repository root.
+val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
+fun version(key: String) = (appVersion.getProperty(key) ?: "0").toInt()
+
 android {
     namespace = "com.hereliesaz.photounroll"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -85,14 +95,28 @@ android {
         applicationId = "com.hereliesaz.photounroll"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = version("versionMajor") * 1_000_000 + version("versionMinor") * 10_000 +
+            version("versionPatch") * 100 + version("versionBuild") + 1
+        versionName = "${version("versionMajor")}.${version("versionMinor")}.${version("versionPatch")}"
+        // Phones (and the x86_64 emulator); the depth runtime ships a native library per ABI.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
+    }
+    // The bundled depth network, read from assets (the same file the web and desktop use).
+    sourceSets["main"].assets.srcDir("models")
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
+    // The model is already compressed weights; storing it lets it be read without inflating.
+    androidResources { noCompress += "onnx" }
 }
 
 compose.desktop {

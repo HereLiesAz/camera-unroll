@@ -7,8 +7,18 @@ import androidx.compose.ui.graphics.asImageBitmap
 import java.io.ByteArrayOutputStream
 
 actual object ImageCodec {
-    actual fun decode(bytes: ByteArray): RgbaImage {
-        val options = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+    actual fun decode(bytes: ByteArray, atLeast: Int): RgbaImage {
+        // A 12 MP photo is 48 MB decoded, and twice that while it is copied out. Reading it at
+        // half or quarter size (the largest power of two that still leaves [atLeast]) avoids
+        // ever holding the whole thing.
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+            val longest = maxOf(bounds.outWidth, bounds.outHeight)
+            while (longest / (sample * 2) >= atLeast) sample *= 2
+        }
+        val options = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888; inSampleSize = sample }
         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
             ?: error("Unsupported image")
         val px = IntArray(bmp.width * bmp.height)
