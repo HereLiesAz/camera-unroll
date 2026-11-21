@@ -84,13 +84,9 @@ object Pipelines {
         if (trimToTurn && fullTurn) strips = strips.take(Arranger.framesInOneTurn(strips.map { it.image }))
         val result = if (strips.size == 1) StitchResult(strips[0].image, false, null)
         else Stitcher.stitch(strips, fullTurn, Stitcher.MAX_DY) { progress(0.3f + 0.7f * it) }
-        // Strips are uniform in surface angle; their scale survives stitching (same-height strips
-        // are pasted, not resized), so the result's width says how far around it goes.
-        val ppr = scale ?: run {
-            val h = strips.map { it.image.height }.sorted()[strips.size / 2]
-            val theta = (maxAngleDeg.coerceIn(5f, 89f) * kotlin.math.PI / 180.0).toFloat()
-            strips.map { it.image.width / (2f * theta) * h / it.image.height }.sorted()[strips.size / 2]
-        }
+        // Strips are uniform in surface angle and carry their scale, so the result's width
+        // says how far around the pillar it goes.
+        val ppr = result.pxPerRadian ?: strips[0].pxPerRadian
         return Rendered(result.image, result.closedLoop, xmp = null, pxPerRadian = ppr)
     }
 

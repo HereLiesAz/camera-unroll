@@ -9,7 +9,8 @@ import kotlin.math.sqrt
  * First guess at [CylinderGuides], meant to be corrected by hand. Two detectors:
  *
  * **Edges** (the usual case: a pillar running out of the frame, any background). The sides of
- * a cylinder are the two longest near-vertical edges with nothing as strong between them.
+ * a cylinder are the two longest near-vertical edges with nothing as strong between them;
+ * given a depth image, they are read from that instead (see [DepthSides]).
  * Rims are not visible, so they are placed at the frame's top and bottom and curved as
  * perspective dictates (see [Perspective.rim]).
  *
@@ -32,18 +33,20 @@ object EdgeSuggester {
     /** @property rimsSeen the rims were found in the photo, not placed at the frame's ends. */
     class Suggestion(val guides: CylinderGuides, val rimsSeen: Boolean)
 
-    fun detect(photo: RgbaImage, focal35: Float? = null, horizon: Float = 0.5f): Suggestion =
-        silhouetteOf(photo)?.let { Suggestion(it, true) } ?: Suggestion(framed(photo, focal35, horizon), false)
+    /** @param depth depth image of [photo] as it is now (leveled), if there is one; preferred for the sides. */
+    fun detect(photo: RgbaImage, focal35: Float? = null, horizon: Float = 0.5f, depth: RgbaImage? = null): Suggestion =
+        silhouetteOf(photo)?.let { Suggestion(it, true) } ?: Suggestion(framed(photo, focal35, horizon, depth), false)
 
     private fun silhouetteOf(photo: RgbaImage): CylinderGuides? {
         val img = photo.scaledToMax(WORK_SIZE)
         return if (img.width < 16 || img.height < 16) null else silhouette(img)
     }
 
-    private fun framed(photo: RgbaImage, focal35: Float?, horizon: Float): CylinderGuides {
+    private fun framed(photo: RgbaImage, focal35: Float?, horizon: Float, depth: RgbaImage?): CylinderGuides {
         val img = photo.scaledToMax(WORK_SIZE)
         if (img.width < 16 || img.height < 16) return CylinderGuides()
-        val (left, right) = sides(img) ?: return CylinderGuides()
+        val fromDepth = depth?.let { DepthSides.measure(it) }?.let { it.leftAt / depth.width to it.rightAt / depth.width }
+        val (left, right) = fromDepth ?: sides(img) ?: return CylinderGuides()
 
         // Rims off-frame: put each just inside the frame, curved as the camera's distance dictates.
         val d = Perspective.distance((right - left) / 2f * photo.width, Perspective.focalPx(focal35, photo.width, photo.height))

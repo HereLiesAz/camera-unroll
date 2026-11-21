@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import com.hereliesaz.photounroll.imaging.CylinderGuides
+import com.hereliesaz.photounroll.imaging.DepthModel
 import com.hereliesaz.photounroll.imaging.EdgeSuggester
 import com.hereliesaz.photounroll.imaging.Exif
 import com.hereliesaz.photounroll.imaging.Leveler
@@ -128,11 +129,15 @@ class AppState(private val scope: CoroutineScope) {
 
     /** Levels [photo] from scratch and guesses its guides on the leveled image. */
     private suspend fun detect(photo: Photo) {
-        val level = withContext(Dispatchers.Default) { Leveler.level(photo.original, photo.focal35) }
+        val depth = DepthModel.estimate(photo.original)
+        val level = withContext(Dispatchers.Default) { Leveler.level(photo.original, photo.focal35, depth) }
         setAdjust(photo, level.adjust)
         photo.adjustJob?.join()
         photo.horizon = level.horizon
-        val found = withContext(Dispatchers.Default) { EdgeSuggester.detect(photo.image, photo.focal35, level.horizon) }
+        val found = withContext(Dispatchers.Default) {
+            // The depth image is bent the same way the photo was, so it still lies over it.
+            EdgeSuggester.detect(photo.image, photo.focal35, level.horizon, depth?.let { level.adjust.apply(it) })
+        }
         photo.guides = found.guides
         photo.rimsSeen = found.rimsSeen
     }

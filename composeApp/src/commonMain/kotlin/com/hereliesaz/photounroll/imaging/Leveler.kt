@@ -17,14 +17,20 @@ object Leveler {
     class Level(val adjust: PhotoAdjust, val horizon: Float)
 
     /** The two sides as lines x = at + slope·(y − h/2), in pixels of the measured image. */
-    internal class Sides(val leftAt: Float, val leftSlope: Float, val rightAt: Float, val rightSlope: Float) {
+    class Sides(val leftAt: Float, val leftSlope: Float, val rightAt: Float, val rightSlope: Float) {
         val lean get() = (leftSlope + rightSlope) / 2f
         val spread get() = rightSlope - leftSlope
         val width get() = rightAt - leftAt
     }
 
-    fun level(photo: RgbaImage, focal35: Float? = null): Level {
-        val img = photo.scaledToMax(EdgeSuggester.WORK_SIZE)
+    /**
+     * @param depth depth image of [photo] ([DepthModel.estimate]) if there is one: the sides are
+     *   then read from it, which no paint, lamp or background can mislead; without it they are
+     *   read from color edges.
+     */
+    fun level(photo: RgbaImage, focal35: Float? = null, depth: RgbaImage? = null): Level {
+        val img = depth ?: photo.scaledToMax(EdgeSuggester.WORK_SIZE)
+        val measure: (RgbaImage) -> Sides? = if (depth != null) DepthSides::measure else ::measure
         val none = Level(PhotoAdjust(), 0.5f)
         if (img.width < 16 || img.height < 16) return none
         val raw = measure(img) ?: return none

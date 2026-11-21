@@ -93,7 +93,13 @@ object Stitcher {
         var loop = closeLoop && strips.size >= 2
         if (loop) {
             val closing = align(seq.planes[kept.last()], seq.planes[kept.first()], forwardOnly = true, maxDy)
-            if (closing.score >= CLOSES_LOOP) links = links + closing else loop = false
+            // Where the strips' scale is known, so is one turn's width; a "loop" far from that
+            // width is two look-alike ends (bare paint matches bare paint), not a closed circle.
+            val scales = strips.mapNotNull { it.pxPerRadian }
+            val turn = if (scales.size == strips.size) 2f * kotlin.math.PI.toFloat() * scales.sorted()[scales.size / 2] else null
+            val around = links.sumOf { it.dx.toDouble() }.toFloat() + closing.dx
+            val plausible = turn == null || kotlin.math.abs(around / turn - 1f) <= TURN_SLACK
+            if (closing.score >= CLOSES_LOOP && plausible) links = links + closing else loop = false
         }
 
         val n = strips.size
@@ -133,6 +139,7 @@ object Stitcher {
 
     /** A closing match weaker than this is no match: the photos do not go all the way around. */
     private const val CLOSES_LOOP = 0.35f
+    private const val TURN_SLACK = 0.2f
 
     /** Offset of strip b's origin relative to strip a's, in a's pixels; [score] is the match's correlation. */
     class Link(val dx: Float, val dy: Float, val score: Float = 1f)

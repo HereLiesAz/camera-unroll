@@ -9,8 +9,9 @@ import kotlin.math.sin
 
 /**
  * An unwrapped (or reprojected) image plus a per-column confidence used when blending.
- * [pxPerRadian] is set when columns are uniform in angle (panorama), so the stitched
- * result can be mapped to a sphere.
+ * [pxPerRadian] is the horizontal scale: columns are uniform in angle, both for a panorama
+ * (so the result can be mapped to a sphere) and for an unrolled pillar (so one turn's width
+ * is known).
  */
 class WeightedStrip(
     val image: RgbaImage,
@@ -79,7 +80,7 @@ object CylinderUnroller {
                 out[ox, oy] = photo.sample(sx, yTop + v * (yBottom - yTop))
             }
         }
-        return WeightedStrip(out, weight)
+        return WeightedStrip(out, weight, radius)
     }
 
     private fun unrollPerspective(
@@ -135,7 +136,7 @@ object CylinderUnroller {
                 out[ox, oy] = photo.sampleCubic(sx, yTop + v * (yBottom - yTop))
             }
         }
-        return WeightedStrip(out, weight)
+        return WeightedStrip(out, weight, outScale)
     }
 
     /** This photo's own scale on the surface nearest the camera, in pixels per pillar radius. */
