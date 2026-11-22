@@ -43,3 +43,14 @@ class CaptureGuideTest {
         assertEquals(null, CaptureGuide.assess(reading(), 0.36f, stepDeg = -30f))
     }
 }
+
+class TaperedPillarGuideTest {
+    @Test
+    fun aPillarsOwnTaperIsNotTilt() {
+        val tapered = CaptureGuide.Reading(0.32f, 0.68f, 0f, 0.5f)
+        assertEquals(CaptureGuide.Fault.TiltDown, CaptureGuide.assess(tapered, null, null))
+        assertEquals(null, CaptureGuide.assess(tapered, null, null, ownTaper = 0.5f))
+        // Tipped on top of the taper is still tilt.
+        assertEquals(CaptureGuide.Fault.TiltUp, CaptureGuide.assess(CaptureGuide.Reading(0.32f, 0.68f, 0f, 0.2f), null, null, ownTaper = 0.5f))
+    }
+}

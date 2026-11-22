@@ -3,6 +3,7 @@ package com.hereliesaz.cameraunroll.imaging
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
@@ -45,7 +46,15 @@ object EdgeSuggester {
     private fun framed(photo: RgbaImage, focal35: Float?, horizon: Float, depth: RgbaImage?): CylinderGuides {
         val img = photo.scaledToMax(WORK_SIZE)
         if (img.width < 16 || img.height < 16) return CylinderGuides()
-        val fromDepth = depth?.let { DepthSides.measure(it) }?.let { it.leftAt / depth.width to it.rightAt / depth.width }
+        val fromDepth = depth?.let { DepthSides.measure(it) }?.let {
+            // Columns per row in the depth image, as widths per height: the same lean in any copy of the photo.
+            val lean = depth.height.toFloat() / depth.width
+            val sharp = sharpen(
+                photo, listOf(it.leftAt / depth.width, it.rightAt / depth.width),
+                listOf(it.leftSlope * lean, it.rightSlope * lean), listOf(SIDE_REACH, SIDE_REACH),
+            )
+            sharp[0] to sharp[1]
+        }
         val (left, right) = fromDepth ?: sides(img) ?: return CylinderGuides()
 
         // Rims off-frame: put each just inside the frame, curved as the camera's distance dictates.
@@ -56,6 +65,50 @@ object EdgeSuggester {
     }
 
     private const val RIM_MARGIN = 0.03f
+
+    /**
+     * Moves edges found in a depth image onto the photo's own. The depth image is small and
+     * soft: its edges are good to a percent or two of the frame, and tend to fall just inside
+     * the pillar. The photo usually has a crisp line within that distance, and the edge is
+     * moved onto it; where it has none that stands out, the edge stays.
+     *
+     * @param at each edge's column at mid-height, as a fraction of the width
+     * @param slopes how far each leans: widths per height, positive leaning right going down
+     * @param reach how far each may be moved, as a fraction of the width
+     */
+    internal fun sharpen(photo: RgbaImage, at: List<Float>, slopes: List<Float>, reach: List<Float>): List<Float> {
+        val work = photo.scaledToMax(SHARPEN_SIZE)
+        val w = work.width
+        val h = work.height
+        if (w < 16 || h < 16) return at
+        val luma = work.luma()
+        val y0 = (h * 0.25f).toInt()
+        val y1 = (h * 0.75f).toInt()
+        return at.indices.map { k ->
+            val lean = slopes[k] * w / h // columns per row, here
+            /** How strong an edge runs along the line through column [x] at mid-height. */
+            fun strength(x: Int): Float {
+                var sum = 0f
+                for (y in y0 until y1) {
+                    val c = (x + lean * (y - h / 2f)).roundToInt().coerceIn(1, w - 2)
+                    sum += abs(luma[y * w + c + 1] - luma[y * w + c - 1])
+                }
+                return sum
+            }
+            val lo = ((at[k] - reach[k]) * w).roundToInt().coerceIn(1, w - 2)
+            val hi = ((at[k] + reach[k]) * w).roundToInt().coerceIn(lo, w - 2)
+            val strengths = (lo..hi).map { strength(it) }
+            val best = strengths.indices.maxBy { strengths[it] }
+            val typical = strengths.sorted()[strengths.size / 2]
+            if (strengths[best] > typical * CRISP) (lo + best + 0.5f) / w else at[k]
+        }
+    }
+
+    private const val SHARPEN_SIZE = 640
+    /** How far a pillar's side may be moved onto the photo's edge (fraction of the width). */
+    private const val SIDE_REACH = 0.025f
+    /** How far an edge must stand above its surroundings to be believed. */
+    private const val CRISP = 2f
 
     /**
      * Left and right side of the cylinder as fractions of the width, or null if no pair of

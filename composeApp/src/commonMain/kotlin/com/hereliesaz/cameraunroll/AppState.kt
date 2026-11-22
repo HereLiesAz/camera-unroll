@@ -15,6 +15,7 @@ import com.hereliesaz.cameraunroll.imaging.Perspective
 import com.hereliesaz.cameraunroll.imaging.ImageCodec
 import com.hereliesaz.cameraunroll.imaging.Pipelines
 import com.hereliesaz.cameraunroll.imaging.PhotoAdjust
+import com.hereliesaz.cameraunroll.imaging.Prism
 import com.hereliesaz.cameraunroll.video.VIDEO_FRAME_MAX_DIM
 import com.hereliesaz.cameraunroll.video.VideoFrames
 import com.hereliesaz.cameraunroll.imaging.Rendered
@@ -30,6 +31,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private var nextId = 0L
+
+/** What is being unrolled: [Auto] lets the photos say ([AppState.beam]). */
+enum class Shape(val label: String) { Auto("AUTO"), Round("ROUND"), Beam("BEAM") }
 
 enum class Mode(val label: String, val action: String) {
     Unroll("UNROLL", "Unroll"),
@@ -66,6 +70,12 @@ class Photo(
     internal var profile: FloatArray? = null
     /** What this photo alone suggests for [profile], before the set is asked. */
     internal var measuredProfile: FloatArray? = null
+    /** The depth image of [original], kept so the photo can be leveled again once the set's shape is known. */
+    internal var depth: RgbaImage? = null
+    /** What this photo alone says about a taper ([DepthSides.taper]). */
+    internal var measuredTaper: DepthSides.Taper? = null
+    /** Where a four-sided beam's edges would be in [image] ([Prism.read]); used when the set is a beam. */
+    internal var beam: Prism.Reading? = null
 
     /** The rims as detection last placed them; while they still stand, they were not chosen by hand. */
     internal var autoGuides: CylinderGuides? = null
@@ -109,6 +119,18 @@ class AppState(private val scope: CoroutineScope) {
     /** Close the last photo onto the first so the output tiles seamlessly. */
     var fullTurn by mutableStateOf(true)
 
+    /** Round pillar or four-sided beam; left to the photos unless chosen here. */
+    var shape by mutableStateOf(Shape.Auto)
+    /** The photos look like a beam's ([Prism.isBeam]). */
+    var looksLikeBeam by mutableStateOf(false)
+        private set
+    /** The subject is unrolled as a four-sided beam ([Beam]), not a round pillar. */
+    val beam: Boolean get() = shape == Shape.Beam || (shape == Shape.Auto && looksLikeBeam)
+    /** The pillar's own taper the photos agree on ([DepthSides.taperConsensus]); 0 for straight sides. */
+    private var taper = 0f
+
+    fun nextShape() { shape = Shape.entries[(shape.ordinal + 1) % Shape.entries.size] }
+
     var progress by mutableStateOf<Float?>(null)
         private set
     var result by mutableStateOf<Result?>(null)
@@ -147,6 +169,7 @@ class AppState(private val scope: CoroutineScope) {
             detect(photo)
             photos += photo
         }
+        settleShape()
         harmonize()
         arrangeNow(from = 0.5f)
     }
@@ -156,8 +179,9 @@ class AppState(private val scope: CoroutineScope) {
 
     /** Levels [photo] from scratch and guesses its guides on the leveled image. */
     private suspend fun detect(photo: Photo) {
-        val depth = DepthModel.estimate(photo.original)
-        val level = withContext(Dispatchers.Default) { Leveler.level(photo.original, photo.focal35, depth) }
+        val depth = photo.depth ?: DepthModel.estimate(photo.original).also { photo.depth = it }
+        val own = taper
+        val level = withContext(Dispatchers.Default) { Leveler.level(photo.original, photo.focal35, depth, own) }
         setAdjust(photo, level.adjust)
         photo.adjustJob?.join()
         photo.horizon = level.horizon
@@ -165,10 +189,26 @@ class AppState(private val scope: CoroutineScope) {
             // The depth image is bent the same way the photo was, so it still lies over it.
             val leveled = depth?.let { level.adjust.apply(it) }
             photo.measuredProfile = leveled?.let { DepthSides.profile(it) }
+            photo.measuredTaper = depth?.let { DepthSides.taper(it) }
+            photo.beam = leveled?.let { Prism.read(it) }?.let { Prism.refine(photo.image, it) }
             EdgeSuggester.detect(photo.image, photo.focal35, level.horizon, leveled)
         }
         photo.guides = found.guides
         photo.rimsSeen = found.rimsSeen
+    }
+
+    /**
+     * Asks the whole set what no single photo can say: whether the subject is a beam, and
+     * whether it tapers. A taper changes how every photo should have been leveled (its sides
+     * are not meant to come out parallel), so when the answer changes they are leveled again.
+     */
+    private suspend fun settleShape() {
+        val stills = photos.filter { !it.fromVideo }
+        looksLikeBeam = Prism.isBeam(stills.map { it.beam })
+        val found = if (looksLikeBeam) 0f else DepthSides.taperConsensus(stills.map { it.measuredTaper })
+        if (found == taper) return
+        taper = found
+        stills.forEach { detect(it) }
     }
 
     /**
@@ -178,7 +218,13 @@ class AppState(private val scope: CoroutineScope) {
     private fun harmonize() {
         // A shape is believed only if the set agrees on it (see [DepthSides.consensus]).
         val shape = DepthSides.consensus(photos.filter { !it.fromVideo }.map { it.measuredProfile })
-        photos.forEach { it.profile = if (it.fromVideo) null else shape }
+        val cone = DepthSides.taperProfile(taper)
+        val radius = when {
+            shape == null -> cone
+            cone == null -> shape
+            else -> FloatArray(shape.size) { shape[it] * cone[it] }
+        }
+        photos.forEach { it.profile = if (it.fromVideo) null else radius }
         val loose = photos.filter { !it.rimsSeen }
         if (loose.isEmpty() || loose.size != photos.count { !it.fromVideo }) return
         val out = Perspective.harmonize(
@@ -224,7 +270,8 @@ class AppState(private val scope: CoroutineScope) {
     }
 
     private suspend fun arrangeNow(from: Float) {
-        if (photos.size < 3 || photos.any { it.fromVideo }) return
+        // A beam's faces are sorted by what is on them ([Beam]); the order of its photos is of no account.
+        if (photos.size < 3 || photos.any { it.fromVideo } || (mode == Mode.Unroll && beam)) return
         photos.forEach { it.adjustJob?.join() }
         val snapshot = photos.toList()
         val m = mode
@@ -234,6 +281,7 @@ class AppState(private val scope: CoroutineScope) {
             when (m) {
                 Mode.Unroll -> Pipelines.arrangeCylinder(
                     snapshot.map { it.image }, snapshot.map { it.guides }, unrollAngle, report, rank, snapshot.map { it.focalPx },
+                    snapshot.map { it.profile },
                 )
                 Mode.Panorama -> Pipelines.arrangePanorama(snapshot.map { it.image }, hfov, report, rank)
             }
@@ -248,7 +296,7 @@ class AppState(private val scope: CoroutineScope) {
         val p = current ?: return
         task {
             if (p.fromVideo) p.guides = withContext(Dispatchers.Default) { EdgeSuggester.suggest(p.image, p.focal35) }
-            else { detect(p); harmonize() }
+            else { detect(p); settleShape(); harmonize() }
         }
     }
 
@@ -295,7 +343,23 @@ class AppState(private val scope: CoroutineScope) {
             val rendered = withContext(Dispatchers.Default) {
                 val report: (Float) -> Unit = { progress = it }
                 when (m) {
-                    Mode.Unroll -> {
+                    Mode.Unroll -> if (beam && snapshot.none { it.fromVideo }) {
+                        fun render(full: List<RgbaImage>, from: Float) = Pipelines.unrollBeam(
+                            full, snapshot.map { it.beam }, snapshot.map { it.horizon },
+                            full.indices.map { Perspective.focalPx(snapshot[it].focal35, full[it].width, full[it].height) },
+                        ) { report(from + (1f - from) * it) }
+                        try {
+                            render(
+                                snapshot.mapIndexed { i, p ->
+                                    report(0.2f * i / snapshot.size)
+                                    p.source?.let { p.adjust.apply(loadPhoto(it, Limits.finalMaxDim), sharp = true) } ?: p.image
+                                },
+                                from = 0.2f,
+                            )
+                        } catch (t: OutOfMemoryError) {
+                            render(snapshot.map { it.image }, from = 0f)
+                        }
+                    } else {
                         // Rims that geometry placed (the pillar runs out of frame) are no one's
                         // choice, so each photo gives all the pillar it shows. Rims found in the
                         // photo, or moved by hand, are kept as they are.

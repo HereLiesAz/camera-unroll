@@ -27,8 +27,11 @@ object Leveler {
      * @param depth depth image of [photo] ([DepthModel.estimate]) if there is one: the sides are
      *   then read from it, which no paint, lamp or background can mislead; without it they are
      *   read from color edges.
+     * @param taper how much wider the pillar itself is at the bottom of the frame than at the top,
+     *   as a share of its width ([DepthSides.taperConsensus]). That much convergence is the
+     *   pillar's own and is left in; only the rest is the phone's pitch.
      */
-    fun level(photo: RgbaImage, focal35: Float? = null, depth: RgbaImage? = null): Level {
+    fun level(photo: RgbaImage, focal35: Float? = null, depth: RgbaImage? = null, taper: Float = 0f): Level {
         val img = depth ?: photo.scaledToMax(EdgeSuggester.WORK_SIZE)
         val measure: (RgbaImage) -> Sides? = if (depth != null) DepthSides::measure else ::measure
         val none = Level(PhotoAdjust(), 0.5f)
@@ -52,11 +55,13 @@ object Leveler {
         // point makes them parallel. The middle row stays put, so scale there is untouched.
         val w = img.width.toFloat()
         val h = img.height.toFloat()
-        val relSpread = now.spread * h / max(1f, now.width) // fractional width change, top to bottom
+        val own = taper * now.width / h // the pillar's own spread, columns per row
+        val tipped = now.spread - own
+        val relSpread = tipped * h / max(1f, now.width) // fractional width change, top to bottom
         var horizon = 0.5f
         if (abs(relSpread) in MIN_SPREAD..MAX_SPREAD) {
-            val dyV = -now.width / now.spread // rows from the middle row to the vanishing point
-            val xV = now.leftAt + now.leftSlope * dyV
+            val dyV = -now.width / tipped // rows from the middle row to the vanishing point
+            val xV = (now.leftAt + now.rightAt) / 2f + now.lean * dyV
             val sl = (xV - 0f) / dyV
             val sr = (xV - w) / dyV
             val quad = listOf(
@@ -65,10 +70,10 @@ object Leveler {
             )
             val tryAdjust = adjust.copy(quad = quad)
             val m = runCatching { measure(tryAdjust.apply(img)) }.getOrNull()
-            if (m != null && abs(m.spread) < abs(now.spread)) {
+            if (m != null && abs(m.spread - taper * m.width / h) < abs(tipped)) {
                 // tan(pitch) = f × (relative width change per row); the horizon sits f·tan(pitch) off center.
                 val f = Perspective.focalPx(focal35, img.width, img.height)
-                horizon = (0.5f + f * f * (now.spread / now.width) / h).coerceIn(-0.5f, 1.5f)
+                horizon = (0.5f + f * f * (tipped / now.width) / h).coerceIn(-0.5f, 1.5f)
                 adjust = tryAdjust
             }
         }

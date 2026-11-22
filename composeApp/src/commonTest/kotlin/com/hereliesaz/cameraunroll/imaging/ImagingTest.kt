@@ -4,11 +4,15 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.cos
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.tan
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ImagingTest {
@@ -426,4 +430,205 @@ class ShapeConsensusTest {
     @Test
     fun oppositeShapesDoNotAddUp() =
         assertEquals(null, DepthSides.consensus(listOf(waist, barrel, waist, barrel, null)))
+}
+
+/** A square beam drawn by ray casting, for [PrismTest] and [BeamTest]. Lengths are in half-widths. */
+private object BeamScene {
+    const val W = 360
+    const val H = 480
+    const val FOCAL = 420f
+    const val HORIZON = 250f
+
+    /** What is painted on face [k] at [s] (0..1 along it) and height [y]: smooth, and different on every face. */
+    fun paint(k: Int, s: Float, y: Float): Int {
+        // Each face has its own grain: were they the same waves merely shifted, one face could
+        // pass for another seen a little higher up.
+        fun wave(a: Float, b: Float, c: Float) = sin((a + 0.6f * k) * s * 6.283f + (b + 0.8f * k * k - 1.3f * k) * y + c + k * 1.7f)
+        val v = 0.5f + 0.2f * wave(1f, 2.1f, 0.3f) + 0.15f * wave(3f, -4.3f, 1.1f) + 0.12f * wave(5f, 7.9f, 2.4f + k)
+        val g = (v * 255f).toInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (g shl 16) or (((g * (3 + k)) / 6) shl 8) or (255 - g)
+    }
+
+    /**
+     * The beam seen from [d] half-widths away with corner [corner] turned [phi] radians off
+     * straight ahead (null: face [corner] seen square on). Faces count up to the right.
+     */
+    fun photo(phi: Float?, d: Float, corner: Int): RgbaImage {
+        // Left to right: (x0, z0, x1, z1, face).
+        val faces = if (phi == null) listOf(floatArrayOf(-1f, d - 1f, 1f, d - 1f, corner.toFloat())) else {
+            val c = 1.4142135f * cos(phi); val s = 1.4142135f * sin(phi)
+            listOf(
+                floatArrayOf(-c, d - s, s, d - c, ((corner + 3) % 4).toFloat()),
+                floatArrayOf(s, d - c, c, d + s, corner.toFloat()),
+            )
+        }
+        val img = RgbaImage(W, H, IntArray(W * H) { 0xFF202020.toInt() })
+        for (px in 0 until W) {
+            val dx = (px + 0.5f - W / 2f) / FOCAL
+            for (f in faces) {
+                // Where the ray x = dx·z meets the face's line.
+                val ex = f[2] - f[0]; val ez = f[3] - f[1]
+                val den = ex - dx * ez
+                if (abs(den) < 1e-6f) continue
+                val t = (dx * f[1] - f[0]) / den
+                if (t < 0f || t > 1f) continue
+                val z = f[1] + t * ez
+                for (py in 0 until H) img[px, py] = paint(f[4].toInt(), t, (py + 0.5f - HORIZON) * z / FOCAL)
+            }
+        }
+        return img
+    }
+
+    /** The beam's edges in [photo]'s frame, exactly, as [Prism.read] would report them. */
+    fun reading(phi: Float?, d: Float): Prism.Reading {
+        fun at(x: Float, z: Float) = 0.5f + FOCAL * x / z / W
+        if (phi == null) return Prism.Reading(at(-1f, d - 1f), null, at(1f, d - 1f))
+        val c = 1.4142135f * cos(phi); val s = 1.4142135f * sin(phi)
+        return Prism.Reading(at(-c, d - s), at(s, d - c), at(c, d + s))
+    }
+}
+
+class PrismTest {
+    @Test
+    fun theCameraIsFoundFromWhereTheEdgesFall() {
+        for ((phi, d) in listOf(0.3f to 8f, -0.5f to 6f, 0f to 10f, 0.55f to 7f)) {
+            val r = BeamScene.reading(phi, d)
+            fun px(v: Float) = (v - 0.5f) * BeamScene.W
+            val pose = assertNotNull(Prism.pose(px(r.left), px(r.corner!!), px(r.right), BeamScene.FOCAL))
+            assertEquals(phi, pose.phi!!, 0.02f)
+            assertEquals(d, pose.d, 0.1f)
+            assertEquals(0f, pose.e, 0.05f)
+        }
+    }
+
+    @Test
+    fun aFaceComesOutAsItWasPainted() {
+        val phi = 0.4f; val d = 7f
+        val r = BeamScene.reading(phi, d)
+        fun px(v: Float) = (v - 0.5f) * BeamScene.W
+        val pose = Prism.pose(px(r.left), px(r.corner!!), px(r.right), BeamScene.FOCAL)!!
+        val faces = Prism.faces(BeamScene.photo(phi, d, corner = 1), pose, BeamScene.HORIZON, BeamScene.FOCAL, 40f, up = 2f, down = 2f)
+        assertEquals(2, faces.size)
+        // The corner is turned to the right, so the left face (face 0) is the one seen more squarely.
+        assertTrue(faces[0].squarely > faces[1].squarely)
+        val img = faces[0].image
+        var off = 0f; var n = 0
+        for (v in 10 until img.height - 10 step 7) for (u in 6 until img.width - 6 step 5) {
+            val want = BeamScene.paint(0, (u + 0.5f) / img.width, -2f + (v + 0.5f) / 40f)
+            off += abs(((img[u, v] shr 16) and 0xFF) - ((want shr 16) and 0xFF)); n++
+        }
+        assertTrue(off / n < 6f, "mean error ${off / n}")
+    }
+
+    @Test
+    fun aBeamIsToldFromARoundPillar() {
+        fun reading(ridge: Float?) = Prism.Reading(0.3f, ridge?.let { 0.3f + 0.4f * it }, 0.7f)
+        // Round: the nearest point stays in the middle.
+        assertFalse(Prism.isBeam(List(8) { reading(0.5f + 0.03f * (it % 3 - 1)) }))
+        // A beam: flat faces, and corners that wander from side to side.
+        assertTrue(Prism.isBeam(listOf(reading(null), reading(0.3f), reading(0.68f), reading(null), reading(0.33f), reading(0.5f))))
+        assertFalse(Prism.isBeam(listOf(reading(null), null)))
+    }
+
+    @Test
+    fun softEdgesAreMovedOntoThePhotosOwn() {
+        // A bright pillar from 30% to 70% of the frame; the depth image put its sides a little inside.
+        val img = RgbaImage(400, 300, IntArray(400 * 300) { if (it % 400 in 120 until 280) 0xFFD0D0D0.toInt() else 0xFF202020.toInt() })
+        val sharp = EdgeSuggester.sharpen(img, listOf(0.315f, 0.69f), listOf(0f, 0f), listOf(0.025f, 0.025f))
+        assertEquals(0.3f, sharp[0], 0.006f)
+        assertEquals(0.7f, sharp[1], 0.006f)
+        // Nothing crisp within reach: left where it was.
+        assertEquals(0.5f, EdgeSuggester.sharpen(img, listOf(0.5f), listOf(0f), listOf(0.025f))[0])
+    }
+}
+
+class BeamTest {
+    @Test
+    fun photosAroundABeamBecomeItsFourFacesInOrder() {
+        // Seven photos walking around, in no particular order, from slightly different distances.
+        val shots = listOf(Triple(0.35f, 7f, 1), Triple(null, 8f, 3), Triple(-0.3f, 7.5f, 2), Triple(0.1f, 6.5f, 3), Triple(null, 7f, 0), Triple(-0.4f, 8f, 0), Triple(0.5f, 7f, 2))
+        val out = Pipelines.unrollBeam(
+            shots.map { BeamScene.photo(it.first, it.second, it.third) },
+            shots.map { BeamScene.reading(it.first, it.second) },
+            shots.map { BeamScene.HORIZON / BeamScene.H },
+            shots.map { BeamScene.FOCAL },
+        )
+        assertTrue(out.wraps)
+        assertEquals(4, out.sides)
+        val faceW = out.image.width / 4
+        // Whichever face comes first, the rest follow it around.
+        fun like(slot: Int, face: Int): Float {
+            // Which row is the camera's height is not pinned down (the result is cropped), so
+            // the whole face is tried at every height and the best one counts.
+            var best = Float.MAX_VALUE
+            for (shift in -80..80 step 2) {
+                var off = 0f; var n = 0
+                for (v in out.image.height / 4 until out.image.height * 3 / 4 step 9) for (u in 4 until faceW - 4 step 5) {
+                    val got = (out.image[slot * faceW + u, v] shr 16) and 0xFF
+                    val want = (BeamScene.paint(face, (u + 0.5f) / faceW, (v + shift - out.image.height / 2f) / (faceW / 2f)) shr 16) and 0xFF
+                    off += abs(got - want); n++
+                }
+                best = min(best, off / n)
+            }
+            return best
+        }
+        val first = (0 until 4).minBy { like(0, it) }
+        for (slot in 0 until 4) {
+            val face = (first + slot) % 4
+            assertTrue(like(slot, face) < 20f, "slot $slot is not face $face: ${like(slot, face)}")
+            for (other in 1..3) assertTrue(like(slot, (face + other) % 4) > like(slot, face) * 2f, "slot $slot could as well be face ${(face + other) % 4}")
+        }
+    }
+}
+
+class TaperTest {
+    /** A depth image of a pillar whose width and nearness both change linearly down the frame. */
+    private fun depth(widthChange: Float, nearnessChange: Float): RgbaImage {
+        val w = 150; val h = 200
+        val img = RgbaImage(w, h, IntArray(w * h) { 0xFF000000.toInt() })
+        for (y in 0 until h) {
+            val t = (y + 0.5f) / h - 0.5f
+            val half = 22f * (1f + widthChange * t)
+            val near = (200f * (1f + nearnessChange * t)).toInt().coerceIn(0, 255)
+            for (x in (w / 2f - half).toInt()..(w / 2f + half).toInt()) img[x, y] = (0xFF shl 24) or (near shl 16) or (near shl 8) or near
+        }
+        return img
+    }
+
+    @Test
+    fun aTippedPhoneIsNotATaper() {
+        // Narrower toward the top and receding by the same share: tilt explains all of it.
+        val t = assertNotNull(DepthSides.taper(depth(widthChange = 0.2f, nearnessChange = 0.2f)))
+        assertEquals(0.2f, t.widthChange, 0.03f)
+        assertEquals(0f, t.unexplained, 0.04f)
+    }
+
+    @Test
+    fun narrowingWithoutRecedingIsATaper() {
+        val t = assertNotNull(DepthSides.taper(depth(widthChange = 0.4f, nearnessChange = 0f)))
+        assertEquals(0.4f, t.unexplained, 0.05f)
+    }
+
+    @Test
+    fun aTaperNeedsTheSetBehindIt() {
+        fun t(width: Float, unexplained: Float) = DepthSides.Taper(width, unexplained)
+        // Every photo sees it; each is tipped a little differently. The common width change is the taper.
+        assertEquals(0.4f, DepthSides.taperConsensus(listOf(t(0.45f, 0.5f), t(0.4f, 0.38f), t(0.33f, 0.42f), t(0.41f, 0.6f), t(0.38f, 0.33f))), 0.011f)
+        // Noise around nothing.
+        assertEquals(0f, DepthSides.taperConsensus(listOf(t(0.1f, 0.08f), t(-0.05f, -0.1f), t(0.02f, 0.12f), t(0f, -0.04f))))
+        // One photo says so, the rest do not.
+        assertEquals(0f, DepthSides.taperConsensus(listOf(t(0.5f, 0.5f), t(0f, 0.02f), t(0.03f, -0.02f), t(0f, 0f))))
+        assertEquals(null, DepthSides.taperProfile(0f))
+        val profile = assertNotNull(DepthSides.taperProfile(0.4f))
+        assertEquals(0.8f, profile.first(), 1e-4f)
+        assertEquals(1.2f, profile.last(), 1e-4f)
+    }
+
+    @Test
+    fun theLevelerLeavesAPillarsOwnTaperIn() {
+        // Sides that converge by 30% top to bottom, all of it the pillar's own.
+        val img = depth(widthChange = 0.3f, nearnessChange = 0f)
+        assertNotEquals(PhotoAdjust.FULL_FRAME, Leveler.level(img, null, img).adjust.quad)
+        assertEquals(PhotoAdjust.FULL_FRAME, Leveler.level(img, null, img, taper = 0.3f).adjust.quad)
+    }
 }
