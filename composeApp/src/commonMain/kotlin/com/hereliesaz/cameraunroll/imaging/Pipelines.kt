@@ -58,6 +58,7 @@ object Pipelines {
     /**
      * Walk-around photos of a cylinder -> its flattened surface.
      * @param focalPx per-photo focal length in pixels; enables the perspective unroll.
+     * @param profiles per-photo radius profile for pillars that swell or pinch ([DepthSides.profile]).
      * @param fullHeight use everything each photo shows of the pillar instead of the rims in
      *   [guides] (see [Perspective.extend]); for rims that were placed by geometry, not by hand.
      * @param trimToTurn the photos are a continuous sequence (video) that may have gone past
@@ -72,6 +73,7 @@ object Pipelines {
         progress: (Float) -> Unit = {},
         focalPx: List<Float?>? = null,
         fullHeight: Boolean = false,
+        profiles: List<FloatArray?>? = null,
     ): Rendered {
         require(photos.size == guides.size)
         @Suppress("NAME_SHADOWING")
@@ -85,7 +87,7 @@ object Pipelines {
             photos.indices.map { CylinderUnroller.nativeScale(photos[it], guides[it], focalPx!![it]!!) }.sorted()[photos.size / 2]
         var strips = photos.indices.map { i ->
             progress(0.15f * i / photos.size)
-            CylinderUnroller.unroll(photos[i], guides[i], maxAngleDeg, focalPx?.get(i), null, scale)
+            CylinderUnroller.unroll(photos[i], guides[i], maxAngleDeg, focalPx?.get(i), null, scale, profiles?.get(i))
         }
         // Second pass: what still separates neighbors after geometry (a degree of lean, a few
         // percent of size) is measured on the strips and unrolled away.
@@ -93,7 +95,7 @@ object Pipelines {
             val fixes = Stitcher.corrections(strips.map { it.image }, HANDHELD_DY)
             strips = photos.indices.map { i ->
                 progress(0.15f + 0.15f * i / photos.size)
-                CylinderUnroller.unroll(photos[i], guides[i], maxAngleDeg, focalPx!![i], fixes[i], scale)
+                CylinderUnroller.unroll(photos[i], guides[i], maxAngleDeg, focalPx!![i], fixes[i], scale, profiles?.get(i))
             }
         }
         if (trimToTurn && fullTurn) strips = strips.take(Arranger.framesInOneTurn(strips.map { it.image }))
