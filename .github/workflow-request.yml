@@ -49,7 +49,7 @@ requested:
 # keystore, passed to Gradle as android.injected.signing.* arguments.
 android-github-release:
   app_name: Camera Unroll
-  package_name: com.hereliesaz.photounroll
+  package_name: com.hereliesaz.cameraunroll
   java_version: "17"
   signing: raw-jks
   inject_signing_args: true

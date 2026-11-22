@@ -96,10 +96,10 @@ val appVersionName = passed("versionNameOverride", "versionName") ?: recorded("v
     ?: listOf("versionMajor", "versionMinor", "versionPatch", "versionBuild").joinToString(".") { recorded(it) ?: "0" }
 
 android {
-    namespace = "com.hereliesaz.photounroll"
+    namespace = "com.hereliesaz.cameraunroll"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
     defaultConfig {
-        applicationId = "com.hereliesaz.photounroll"
+        applicationId = "com.hereliesaz.cameraunroll"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = appVersionCode
@@ -127,7 +127,7 @@ android {
 
 compose.desktop {
     application {
-        mainClass = "com.hereliesaz.photounroll.MainKt"
+        mainClass = "com.hereliesaz.cameraunroll.MainKt"
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "CameraUnroll"

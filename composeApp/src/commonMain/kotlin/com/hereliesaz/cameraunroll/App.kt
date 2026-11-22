@@ -1,0 +1,463 @@
+package com.hereliesaz.cameraunroll
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.hereliesaz.cameraunroll.imaging.PhotoAdjust
+import com.hereliesaz.cameraunroll.capture.CameraSource
+import com.hereliesaz.cameraunroll.ui.CaptureScreen
+import com.hereliesaz.cameraunroll.ui.GuideEditor
+import com.hereliesaz.cameraunroll.ui.Ink
+import com.hereliesaz.cameraunroll.ui.MIN_TARGET_DP
+import com.hereliesaz.cameraunroll.ui.CameraUnrollTheme
+import com.hereliesaz.cameraunroll.ui.RotatePreview
+import com.hereliesaz.cameraunroll.ui.PillarViewer
+import com.hereliesaz.cameraunroll.ui.StripViewer
+import com.hereliesaz.cameraunroll.ui.WarpEditor
+import com.hereliesaz.cameraunroll.ui.ZoomableImage
+import com.hereliesaz.cameraunroll.ui.snapAngle
+import io.github.vinceglb.filekit.dialogs.FileKitMode
+import io.github.vinceglb.filekit.dialogs.FileKitType
+import io.github.vinceglb.filekit.dialogs.compose.rememberFilePickerLauncher
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+
+private val TARGET = MIN_TARGET_DP.dp
+
+@Composable
+fun App() = CameraUnrollTheme {
+    val scope = rememberCoroutineScope()
+    val state = remember { AppState(scope) }
+    val picker = rememberFilePickerLauncher(type = FileKitType.Image, mode = FileKitMode.Multiple()) { files ->
+        if (!files.isNullOrEmpty()) state.import(files)
+    }
+    val videoPicker = rememberFilePickerLauncher(type = FileKitType.Video, mode = FileKitMode.Single) { file ->
+        if (file != null) state.importVideo(file)
+    }
+    FileDropEffect(onImages = { state.import(it) }, onVideo = { state.importVideo(it) })
+    val save = rememberJpegSaver()
+    val addPhotos = { picker.launch() }
+    val addVideo = { videoPicker.launch() }
+
+    Column(Modifier.fillMaxSize().background(Ink.Black).safeDrawingPadding().padding(horizontal = 12.dp)) {
+        ModeTabs(state)
+        state.progress?.let {
+            LinearProgressIndicator(
+                progress = { it },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = Ink.Bone,
+                trackColor = Ink.Ash,
+            )
+        }
+        state.error?.let { Text("— $it", color = Ink.Smoke, fontSize = 14.sp, modifier = Modifier.padding(vertical = 4.dp)) }
+
+        val result = state.result
+        val addShots = { state.capturing = true }
+        // Back steps out of the camera or the result before it leaves the app, and a long
+        // render or a capture in progress keeps the screen awake.
+        BackAction(enabled = state.capturing || result != null || state.busy) {
+            when {
+                state.capturing -> state.capturing = false
+                state.busy -> Unit // leaving mid-render would throw the work away
+                else -> state.result = null
+            }
+        }
+        KeepScreenOn(state.capturing || state.busy)
+        when {
+            state.capturing -> CaptureScreen(
+                onDone = { shots -> state.capturing = false; state.importShots(shots) },
+                modifier = Modifier.weight(1f),
+            )
+            result != null -> ResultView(result, onBack = { state.result = null }, onSave = {
+                scope.launch { save(state.encode(result), result.mode.label.lowercase()) }
+            })
+            state.photos.isEmpty() -> Empty(state, addPhotos, addVideo, addShots, Modifier.weight(1f))
+            else -> Editor(state, addPhotos, addVideo, addShots, Modifier.weight(1f))
+        }
+    }
+}
+
+/** A text tab at least [TARGET] tall, so a thumb can hit it. */
+@Composable
+private fun TabLabel(label: String, selected: Boolean, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .heightIn(min = TARGET)
+            .clickable(enabled = enabled, role = Role.Tab, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (selected) Ink.Bone else Ink.Smoke,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            letterSpacing = 2.sp,
+            fontSize = 14.sp,
+        )
+        if (selected) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp).background(Ink.Bone))
+    }
+}
+
+@Composable
+private fun ModeTabs(state: AppState) {
+    Row(Modifier.fillMaxWidth()) {
+        Mode.entries.forEach { m ->
+            TabLabel(m.label, m == state.mode, enabled = !state.busy, modifier = Modifier.weight(1f)) {
+                state.mode = m; state.result = null
+            }
+        }
+    }
+}
+
+@Composable
+private fun Empty(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit, modifier: Modifier) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            when (state.mode) {
+                Mode.Unroll ->
+                    "Walk around the cylinder.\nOne photo every 30–45°, same height, same distance.\nIt will lie flat for you."
+                Mode.Panorama ->
+                    "Stand still. Turn.\nOne photo every 30–40°, overlapping by a third.\nThe horizon never ends."
+            },
+            color = Ink.Smoke,
+            textAlign = TextAlign.Center,
+            lineHeight = 24.sp,
+        )
+        Spacer(Modifier.height(32.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            BigButton("PHOTOS", enabled = !state.busy, onClick = addPhotos)
+            BigButton("VIDEO", enabled = !state.busy, onClick = addVideo)
+            // Guided capture walks the photographer around a pillar; a panorama has none.
+            if (state.mode == Mode.Unroll && CameraSource.available) BigButton("CAMERA", enabled = !state.busy, onClick = addShots)
+        }
+    }
+}
+
+@Composable
+private fun BigButton(label: String, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.heightIn(min = 56.dp),
+        border = BorderStroke(1.dp, if (enabled) Ink.Bone else Ink.Ash),
+    ) { Text(label, letterSpacing = 3.sp, fontSize = 15.sp) }
+}
+
+@Composable
+private fun Editor(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit, modifier: Modifier) {
+    val photo = state.current ?: return
+    val haptics = LocalHapticFeedback.current
+    val tick = remember(haptics) { { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove) } }
+    // Rotation while the finger (or slider) is down; the real resample happens on release.
+    var liveAngle by remember(photo, photo.adjust.rotationDeg) { mutableStateOf(photo.adjust.rotationDeg) }
+    Column(modifier) {
+        Row(Modifier.fillMaxWidth()) {
+            Tool.entries.forEach { t ->
+                val label = if (t == Tool.Main && state.mode == Mode.Panorama) "VIEW" else t.label
+                TabLabel(label, t == state.tool, modifier = Modifier.weight(1f)) { state.tool = t }
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                state.tool == Tool.Rotate ->
+                    RotatePreview(
+                        photo.originalBitmap, liveAngle,
+                        onAngle = { liveAngle = it },
+                        onCommit = { state.setAdjust(photo, photo.adjust.copy(rotationDeg = liveAngle)) },
+                        viewKey = photo, onHaptic = tick, modifier = Modifier.fillMaxSize(),
+                    )
+                state.tool == Tool.Warp ->
+                    WarpEditor(
+                        photo.rotatedBitmap, photo.adjust.quad,
+                        { state.setAdjust(photo, photo.adjust.copy(quad = it)) },
+                        viewKey = photo, onHaptic = tick, modifier = Modifier.fillMaxSize(),
+                    )
+                state.mode == Mode.Unroll ->
+                    GuideEditor(photo.bitmap, photo.guides, { photo.guides = it }, viewKey = photo, onHaptic = tick, modifier = Modifier.fillMaxSize())
+                else ->
+                    ZoomableImage(photo.bitmap, viewKey = photo, modifier = Modifier.fillMaxSize())
+            }
+            Hint(state.tool, state.mode)
+        }
+        Spacer(Modifier.height(8.dp))
+        Thumbnails(state, addPhotos, addVideo, addShots)
+        Spacer(Modifier.height(4.dp))
+
+        when {
+            state.tool == Tool.Rotate -> {
+                Text("ROTATE ${((liveAngle * 10).roundToInt() / 10f)}°", color = Ink.Smoke, letterSpacing = 2.sp, fontSize = 14.sp)
+                Slider(
+                    value = liveAngle,
+                    onValueChange = { v ->
+                        val snapped = snapAngle(v)
+                        if (snapped != null && snapped != liveAngle) tick()
+                        liveAngle = snapped ?: v
+                    },
+                    onValueChangeFinished = { state.setAdjust(photo, photo.adjust.copy(rotationDeg = liveAngle)) },
+                    valueRange = -180f..180f,
+                    colors = SliderDefaults.colors(thumbColor = Ink.Bone, activeTrackColor = Ink.Bone, inactiveTrackColor = Ink.Ash),
+                )
+                ActionRow {
+                    fun turn(by: Float) {
+                        val a = ((photo.adjust.rotationDeg + by + 540f) % 360f) - 180f
+                        state.setAdjust(photo, photo.adjust.copy(rotationDeg = a))
+                    }
+                    TextButton(onClick = { turn(-90f) }) { Text("−90°") }
+                    TextButton(onClick = { turn(90f) }) { Text("+90°") }
+                    TextButton(onClick = { state.setAdjust(photo, photo.adjust.copy(rotationDeg = 0f)) }) { Text("RESET") }
+                    TextButton(onClick = state::applyAdjustToAll, enabled = !state.busy) { Text("APPLY TO ALL") }
+                }
+            }
+            state.tool == Tool.Warp -> ActionRow {
+                TextButton(onClick = { state.setAdjust(photo, photo.adjust.copy(quad = PhotoAdjust.FULL_FRAME)) }) { Text("RESET") }
+                TextButton(onClick = state::applyAdjustToAll, enabled = !state.busy) { Text("APPLY TO ALL") }
+            }
+            state.mode == Mode.Unroll -> {
+                LabeledSlider("ARC ±${state.unrollAngle.roundToInt()}°", state.unrollAngle, 20f..85f) { state.unrollAngle = it }
+                ActionRow {
+                    TextButton(onClick = state::autoGuides, enabled = !state.busy) { Text("AUTO-DETECT") }
+                    TextButton(onClick = state::applyGuidesToAll, enabled = !state.busy) { Text("APPLY TO ALL") }
+                    TextButton(onClick = state::arrange, enabled = !state.busy && state.canArrange) { Text("ORDER") }
+                }
+            }
+            else -> {
+                LabeledSlider("LENS FOV ${state.hfov.roundToInt()}°", state.hfov, 30f..120f) { state.hfov = it }
+                ActionRow {
+                    TextButton(onClick = state::arrange, enabled = !state.busy && state.canArrange) { Text("ORDER") }
+                }
+            }
+        }
+
+        Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Switch(
+                checked = state.fullTurn,
+                onCheckedChange = { state.fullTurn = it },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Ink.Black, checkedTrackColor = Ink.Bone,
+                    uncheckedThumbColor = Ink.Smoke, uncheckedTrackColor = Ink.Coal, uncheckedBorderColor = Ink.Smoke,
+                ),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("FULL 360°", color = Ink.Smoke, letterSpacing = 2.sp, fontSize = 14.sp)
+            Spacer(Modifier.weight(1f))
+            BigButton(
+                state.mode.action.uppercase(),
+                enabled = !state.busy && (state.mode == Mode.Panorama || state.photos.all { it.guides.isValid }),
+                onClick = state::process,
+            )
+        }
+    }
+}
+
+/** One line of what the fingers can do here; fades with the first interaction would be nicer, but a line costs nothing. */
+@Composable
+private fun Hint(tool: Tool, mode: Mode) {
+    val text = when {
+        tool == Tool.Rotate -> "twist with two fingers · pinch to zoom"
+        tool == Tool.Warp -> "drag a corner · pinch to zoom"
+        mode == Mode.Unroll -> "drag a handle · pinch to zoom"
+        else -> "pinch to zoom"
+    }
+    Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.BottomCenter) {
+        Text(text, color = Ink.Smoke, fontSize = 12.sp, letterSpacing = 1.sp)
+    }
+}
+
+/** Buttons that scroll sideways rather than wrap or clip on a narrow screen. */
+@Composable
+private fun ActionRow(content: @Composable () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) { content() }
+}
+
+@Composable
+private fun Thumbnails(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit, addShots: () -> Unit) {
+    // Drag a thumbnail sideways to reorder: it follows the pointer and trades places with a
+    // neighbor once past half a slot.
+    val haptics = LocalHapticFeedback.current
+    val pickUp = { haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
+    var dragging by remember { mutableStateOf<Photo?>(null) }
+    var dragDx by remember { mutableStateOf(0f) }
+    val slot = with(LocalDensity.current) { 88.dp.toPx() }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        itemsIndexed(state.photos, key = { _, p -> p.id }) { i, p ->
+            val isDragged = dragging === p
+            Box(
+                Modifier
+                    .zIndex(if (isDragged) 1f else 0f)
+                    .graphicsLayer { translationX = if (isDragged) dragDx else 0f }
+                    .pointerInput(p, state.busy) {
+                        if (state.busy) return@pointerInput
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            // A mouse drags a thumbnail at once. A finger has to be able to
+                            // scroll the strip too, so it picks a thumbnail up by holding it.
+                            val start = if (down.type == PointerType.Touch) awaitLongPressOrCancellation(down.id)
+                            else awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                            if (start != null) {
+                                if (down.type == PointerType.Touch) pickUp()
+                                dragging = p
+                                dragDx = 0f
+                                drag(start.id) { change ->
+                                    dragDx += change.positionChange().x
+                                    change.consume()
+                                    val at = state.photos.indexOf(p)
+                                    if (dragDx > slot / 2 && at < state.photos.lastIndex) { state.move(at, at + 1); dragDx -= slot }
+                                    else if (dragDx < -slot / 2 && at > 0) { state.move(at, at - 1); dragDx += slot }
+                                }
+                                dragging = null
+                                dragDx = 0f
+                            }
+                        }
+                    }
+                    .size(80.dp)
+                    .border(if (i == state.selected) 2.dp else 1.dp, if (i == state.selected) Ink.Bone else Ink.Ash)
+                    .clickable { state.selected = i },
+            ) {
+                Image(p.bitmap, p.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                // Removal is a separate, full-size target in the corner, away from the selecting tap.
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .size(TARGET - 8.dp)
+                        .clickable(enabled = !state.busy, role = Role.Button) { state.remove(i) },
+                    contentAlignment = Alignment.TopEnd,
+                ) {
+                    Text(
+                        "×",
+                        color = Ink.Bone,
+                        fontSize = 20.sp,
+                        modifier = Modifier.background(Ink.Black.copy(alpha = 0.65f)).padding(horizontal = 8.dp),
+                    )
+                }
+            }
+        }
+        item { AddTile("+ PHOTOS", !state.busy, addPhotos) }
+        item { AddTile("+ VIDEO", !state.busy, addVideo) }
+        if (state.mode == Mode.Unroll && CameraSource.available) item { AddTile("+ CAMERA", !state.busy, addShots) }
+    }
+}
+
+@Composable
+private fun AddTile(label: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(80.dp)
+            .border(1.dp, if (enabled) Ink.Smoke else Ink.Ash)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (enabled) Ink.Bone else Ink.Smoke, fontSize = 12.sp, letterSpacing = 1.sp, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+    Column {
+        Text(label, color = Ink.Smoke, letterSpacing = 2.sp, fontSize = 14.sp)
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            valueRange = range,
+            colors = SliderDefaults.colors(thumbColor = Ink.Bone, activeTrackColor = Ink.Bone, inactiveTrackColor = Ink.Ash),
+        )
+    }
+}
+
+@Composable
+private fun ResultView(result: Result, onBack: () -> Unit, onSave: () -> Unit) {
+    val arc = result.rendered.arc
+    val heightRadii = result.rendered.heightRadii
+    // The pillar view needs to know how far around the strip goes; a panorama has no pillar.
+    val canWrap = result.mode == Mode.Unroll && arc != null && heightRadii != null
+    var pillar by remember(result) { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        if (canWrap) Row(Modifier.fillMaxWidth()) {
+            TabLabel("FLAT", !pillar, modifier = Modifier.weight(1f)) { pillar = false }
+            TabLabel("PILLAR", pillar, modifier = Modifier.weight(1f)) { pillar = true }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (pillar && canWrap) PillarViewer(result.bitmap, arc!!, heightRadii!!, Modifier.fillMaxSize())
+            else StripViewer(result.bitmap, result.rendered.wraps, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.BottomCenter) {
+                Text(
+                    if (pillar) "drag to spin" else "drag · pinch or double-tap to zoom",
+                    color = Ink.Smoke, fontSize = 12.sp, letterSpacing = 1.sp,
+                )
+            }
+        }
+        Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack, modifier = Modifier.heightIn(min = 56.dp)) { Text("BACK", fontSize = 15.sp) }
+            Spacer(Modifier.weight(1f))
+            Text(
+                "${result.rendered.image.width}×${result.rendered.image.height}" + when {
+                    result.rendered.wraps -> "  ·  seamless"
+                    // Not all the way around: say how far, so a missing side is no surprise.
+                    canWrap -> "  ·  ${(arc!! * 180f / kotlin.math.PI.toFloat()).roundToInt()}° of 360°"
+                    else -> ""
+                },
+                color = Ink.Smoke,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.weight(1f))
+            BigButton("SAVE JPEG", onClick = onSave)
+        }
+    }
+}
