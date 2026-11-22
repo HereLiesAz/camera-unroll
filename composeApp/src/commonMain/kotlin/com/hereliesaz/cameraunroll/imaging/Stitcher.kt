@@ -167,7 +167,7 @@ object Stitcher {
 
     /**
      * Works out where strips of one height sit relative to each other. Every pair (or, in a
-     * long run, every pair of near neighbors) is aligned; the most trustworthy matches that
+     * long run, every pair of near neighbors) is aligned, by correlation and by matched marks; the most trustworthy matches that
      * connect everything (a maximum spanning tree) give each strip a first position, every
      * other match that agrees refines it (see [solve]), and sorting by position is the order. Photos shot out of sequence, in both directions, or twice from
      * the same spot all land where their content says they belong.
@@ -178,13 +178,32 @@ object Stitcher {
         if (n < 2) return Sequence(IntArray(n) { it }, emptyList(), planes, n > 0)
         val window = if (n > EXHAUSTIVE) NEIGHBORS else n
         val pair = HashMap<Int, Link>()
+        val marks = planes.map { Features.marks(it.fine) }
+        val confirmed = HashSet<Int>()
+        // A strip's width in full pixels: the yardstick for "the same match".
+        val unit = planes.minOf { it.fine.w } * planes[0].fullH.toFloat() / planes[0].fine.h
         var done = 0
         val total = (0 until n).sumOf { i -> (i + 1 until n).count { j -> j - i <= window || n - (j - i) <= window } }
         for (i in 0 until n) for (j in i + 1 until n) {
             if (j - i > window && n - (j - i) > window) continue
-            pair[i * n + j] = align(planes[i], planes[j], forwardOnly = false, maxDy)
+            var l = align(planes[i], planes[j], forwardOnly = false, maxDy)
+            // A second opinion from matched marks (see [Features]). Agreement confirms the
+            // match; a well-supported disagreement overrules it; silence leaves it on its own
+            // merits, which have to be strong to count.
+            val m = Features.match(marks[i], marks[j], (maxDy * planes[i].fine.h).roundToInt())
+            if (m != null) {
+                val toFull = planes[i].fullH.toFloat() / planes[i].fine.h
+                val agrees = abs(m.dx * toFull - l.dx) <= AGREES * unit
+                if (agrees) confirmed += i * n + j
+                else if (m.votes >= OVERRULES) {
+                    l = Link(m.dx * toFull, m.dy * toFull, SURE_ENOUGH + (1f - SURE_ENOUGH) * min(1f, m.votes / 30f))
+                    confirmed += i * n + j
+                }
+            }
+            pair[i * n + j] = l
             progress(0.9f * ++done / total)
         }
+        fun confirmed(i: Int, j: Int) = (if (i < j) i * n + j else j * n + i) in confirmed
         fun link(i: Int, j: Int): Link? =
             if (i < j) pair[i * n + j] else pair[j * n + i]?.let { Link(-it.dx, -it.dy, it.score) }
 
@@ -201,7 +220,7 @@ object Stitcher {
             var to = -1
             for (i in 0 until n) if (inTree[i]) for (j in 0 until n) if (!inTree[j]) {
                 val l = link(i, j) ?: continue
-                val trust = trust(l, i, j, n)
+                val trust = trust(l, i, j, n) + if (confirmed(i, j)) CONFIRMED else 0f
                 if (trust > bestTrust) { bestTrust = trust; best = l; from = i; to = j }
             }
             if (best == null) {
@@ -227,13 +246,14 @@ object Stitcher {
         // with it (within a tenth of a strip) is a second, third, fourth opinion on the same
         // positions; solving for the positions that satisfy all of them at once spreads each
         // match's error over the whole set instead of letting it pile up along a chain.
-        val w = planes.minOf { it.fine.w } * planes[0].fullH.toFloat() / planes[0].fine.h
         val h = planes[0].fullH.toFloat()
         val trusted = ArrayList<Pair3>()
         for (i in 0 until n) for (j in i + 1 until n) {
             val l = pair[i * n + j] ?: continue
-            if (l.score < MATCHES) continue
-            if (abs(l.dx - (x[j] - x[i])) > AGREES * w || abs(l.dy - (y[j] - y[i])) > AGREES * h) continue
+            // Correlation alone finds some match between any two strips; without marks to
+            // back it, only a strong one is believed.
+            if (l.score < MATCHES || (!confirmed(i, j) && l.score < SURE_ENOUGH)) continue
+            if (abs(l.dx - (x[j] - x[i])) > AGREES * unit || abs(l.dy - (y[j] - y[i])) > AGREES * h) continue
             trusted += Pair3(i, j, l)
         }
         solve(x, trusted) { it.dx }
@@ -273,6 +293,13 @@ object Stitcher {
             }
         }
     }
+
+    /** Head start, in the tree, for a match that marks confirm. */
+    private const val CONFIRMED = 0.25f
+    /** Marks agreeing in at least this number overrule correlation when the two disagree. */
+    private const val OVERRULES = 10
+    /** Correlation this high is believed without marks to confirm it. */
+    private const val SURE_ENOUGH = 0.6f
 
     /** A match within this fraction of a strip of where the tree puts it is taken to be the same match. */
     private const val AGREES = 0.12f
