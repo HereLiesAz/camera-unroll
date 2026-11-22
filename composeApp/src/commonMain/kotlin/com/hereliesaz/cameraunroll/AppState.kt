@@ -60,6 +60,13 @@ class Photo(
     var rimsSeen = fromVideo
         internal set
     val focalPx: Float get() = Perspective.focalPx(focal35, original.width, original.height)
+
+    /** The rims as detection last placed them; while they still stand, they were not chosen by hand. */
+    internal var autoGuides: CylinderGuides? = null
+    val rimsByHand: Boolean
+        get() = autoGuides?.let { a ->
+            a.topY != guides.topY || a.bottomY != guides.bottomY || a.topBulge != guides.topBulge || a.bottomBulge != guides.bottomBulge
+        } ?: true
     /** Stable list key (thumbnails keep their gesture state while being reordered). */
     val id: Long = nextId++
     var guides by mutableStateOf(guides)
@@ -166,7 +173,7 @@ class AppState(private val scope: CoroutineScope) {
         val out = Perspective.harmonize(
             loose.map { it.guides }, loose.map { it.image.width to it.image.height }, loose.map { it.focalPx }, loose.map { it.horizon },
         )
-        loose.forEachIndexed { i, p -> p.guides = out[i] }
+        loose.forEachIndexed { i, p -> p.guides = out[i]; p.autoGuides = out[i] }
     }
 
     /**
@@ -278,9 +285,14 @@ class AppState(private val scope: CoroutineScope) {
                 val report: (Float) -> Unit = { progress = it }
                 when (m) {
                     Mode.Unroll -> {
+                        // Rims that geometry placed (the pillar runs out of frame) are no one's
+                        // choice, so each photo gives all the pillar it shows. Rims found in the
+                        // photo, or moved by hand, are kept as they are.
+                        val fullHeight = snapshot.none { it.rimsSeen || it.rimsByHand }
                         fun render(full: List<RgbaImage>, from: Float) = Pipelines.unrollCylinder(
                             full, snapshot.map { it.guides }, unrollAngle, fullTurn, trim, { report(from + (1f - from) * it) },
                             full.indices.map { Perspective.focalPx(snapshot[it].focal35, full[it].width, full[it].height) },
+                            fullHeight,
                         )
                         try {
                             // The result is made from larger, sharper copies than the ones edited on

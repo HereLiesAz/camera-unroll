@@ -58,6 +58,8 @@ object Pipelines {
     /**
      * Walk-around photos of a cylinder -> its flattened surface.
      * @param focalPx per-photo focal length in pixels; enables the perspective unroll.
+     * @param fullHeight use everything each photo shows of the pillar instead of the rims in
+     *   [guides] (see [Perspective.extend]); for rims that were placed by geometry, not by hand.
      * @param trimToTurn the photos are a continuous sequence (video) that may have gone past
      *   one full turn; frames after the first view returns are dropped.
      */
@@ -69,8 +71,13 @@ object Pipelines {
         trimToTurn: Boolean = false,
         progress: (Float) -> Unit = {},
         focalPx: List<Float?>? = null,
+        fullHeight: Boolean = false,
     ): Rendered {
         require(photos.size == guides.size)
+        @Suppress("NAME_SHADOWING")
+        val guides = if (fullHeight && focalPx != null && focalPx.all { it != null }) {
+            Perspective.extend(guides, photos.map { it.width to it.height }, focalPx.map { it!! })
+        } else guides
         // One scale for all: the median photo's, so nearer shots are not blown up to match
         // nor the best ones thrown away, and no strip is resampled a second time to fit.
         val perspective = focalPx != null && focalPx.all { it != null }
