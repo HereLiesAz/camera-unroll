@@ -5,7 +5,11 @@ package com.hereliesaz.cameraunroll.imaging
  * @property pxPerRadian horizontal pixels per radian of the subject's surface, when known
  *   (an unrolled pillar); for a pillar this is also pixels per radius, so it gives its shape.
  */
-class Rendered(val image: RgbaImage, val wraps: Boolean, private val xmp: String?, val pxPerRadian: Float? = null) {
+class Rendered(
+    val image: RgbaImage, val wraps: Boolean, private val xmp: String?, val pxPerRadian: Float? = null,
+    /** Flat faces the subject has (4 for a beam); 0 for a round pillar or a panorama. */
+    val sides: Int = 0,
+) {
     /** Radians of the way around the subject the image covers; a full turn when it [wraps]. */
     val arc: Float?
         get() = if (wraps) (2 * kotlin.math.PI).toFloat() else pxPerRadian?.let { kotlin.math.min((2 * kotlin.math.PI).toFloat(), image.width / it) }
@@ -45,8 +49,9 @@ object Pipelines {
         progress: (Float) -> Unit = {},
         rank: IntArray? = null,
         focalPx: List<Float?>? = null,
+        profiles: List<FloatArray?>? = null,
     ): IntArray = Arranger.order(
-        photos.indices.map { CylinderUnroller.unroll(photos[it], guides[it], maxAngleDeg, focalPx?.get(it)).image },
+        photos.indices.map { CylinderUnroller.unroll(photos[it], guides[it], maxAngleDeg, focalPx?.get(it), profile = profiles?.get(it)).image },
         progress,
         rank,
         if (focalPx != null) HANDHELD_DY else Stitcher.MAX_DY,
@@ -105,6 +110,29 @@ object Pipelines {
         // says how far around the pillar it goes.
         val ppr = result.pxPerRadian ?: strips[0].pxPerRadian
         return Rendered(result.image, result.closedLoop, xmp = null, pxPerRadian = ppr)
+    }
+
+    /**
+     * Photos walked around a four-sided beam -> its faces laid flat side by side ([Beam]).
+     *
+     * @param readings where the beam's edges are in each (leveled) photo; null skips the photo
+     * @param horizons each photo's horizon row as a fraction of its height
+     */
+    fun unrollBeam(
+        photos: List<RgbaImage>,
+        readings: List<Prism.Reading?>,
+        horizons: List<Float>,
+        focalPx: List<Float>,
+        progress: (Float) -> Unit = {},
+    ): Rendered {
+        val views = photos.indices.mapNotNull { i ->
+            val r = readings[i] ?: return@mapNotNull null
+            val w = photos[i].width
+            fun px(fraction: Float) = (fraction - 0.5f) * w
+            val pose = Prism.pose(px(r.left), r.corner?.let(::px), px(r.right), focalPx[i]) ?: return@mapNotNull null
+            Beam.View(photos[i], pose, horizons[i] * photos[i].height, focalPx[i])
+        }
+        return Beam.assemble(views, progress)
     }
 
     /** Photos taken turning in place -> equirectangular band with Photo Sphere metadata. */

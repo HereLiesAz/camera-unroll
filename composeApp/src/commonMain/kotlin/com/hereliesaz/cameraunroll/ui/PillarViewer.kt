@@ -15,6 +15,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.unit.IntOffset
@@ -26,6 +28,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * The unrolled strip wrapped back onto a pillar you can spin by dragging (it keeps turning
@@ -40,9 +43,10 @@ import kotlin.math.roundToInt
  * @param arc radians of surface the strip covers (2π when it closes on itself)
  * @param heightRadii the strip's height in pillar radii, which fixes the pillar's proportions
  * @param startYaw how far the pillar is turned when first shown (radians; 0 faces the strip's middle)
+ * @param sides flat faces the subject has (4 for a beam, see [drawBeam]); 0 for a round pillar
  */
 @Composable
-fun PillarViewer(bitmap: ImageBitmap, arc: Float, heightRadii: Float, modifier: Modifier = Modifier, startYaw: Float = 0f) {
+fun PillarViewer(bitmap: ImageBitmap, arc: Float, heightRadii: Float, modifier: Modifier = Modifier, startYaw: Float = 0f, sides: Int = 0) {
     val scope = rememberCoroutineScope()
     val decay = rememberSplineBasedDecay<Float>()
     val yaw = remember(bitmap) { Animatable(startYaw) }
@@ -69,6 +73,7 @@ fun PillarViewer(bitmap: ImageBitmap, arc: Float, heightRadii: Float, modifier: 
             }
         },
     ) {
+        if (sides >= 3) { drawBeam(bitmap, arc, heightRadii, yaw.value, sides); return@Canvas }
         val r = pillarRadius(size, heightRadii)
         val body = r * heightRadii * cos(TILT)
         val sink = r * kotlin.math.sin(TILT) // how far the near edge of a rim sits below its far edge
@@ -111,6 +116,76 @@ fun PillarViewer(bitmap: ImageBitmap, arc: Float, heightRadii: Float, modifier: 
             // The surface turns away from the viewer toward the silhouette, and darkens.
             drawRect(
                 Color.Black.copy(alpha = SHADE * (1f - cos(mid))),
+                Offset(at.x.toFloat(), at.y.toFloat()), Size(box.width.toFloat(), box.height.toFloat()),
+            )
+            px = next
+        }
+    }
+}
+
+/**
+ * The strip folded back around a beam with [sides] flat faces. Each face is a plane, so
+ * its picture is its part of the strip squeezed evenly to the width the face shows; its top
+ * and bottom edges slant because one corner is farther from the viewer than the other.
+ * Faces the strip does not reach are bare.
+ */
+private fun DrawScope.drawBeam(bitmap: ImageBitmap, arc: Float, heightRadii: Float, yaw: Float, sides: Int) {
+    val r = pillarRadius(size, heightRadii) // of the round pillar with the same distance around
+    val turn = (2 * PI).toFloat() / sides
+    val corner = r * turn / (2f * sin(turn / 2f)) // from the axis out to a corner
+    val body = (r * heightRadii * cos(TILT)).roundToInt()
+    val sink = corner * sin(TILT)
+    val cx = size.width / 2f
+    val top = (size.height - body) / 2f
+    /** Where on screen corner [k] is: the strip's left end is corner 0. */
+    fun angle(k: Int) = k * turn - arc / 2f + yaw
+
+    val cap = Path()
+    for (k in 0 until sides) {
+        val x = cx + corner * sin(angle(k))
+        val y = top + sink * cos(angle(k))
+        if (k == 0) cap.moveTo(x, y) else cap.lineTo(x, y)
+    }
+    cap.close()
+    drawPath(cap, CAP)
+
+    for (j in 0 until sides) {
+        val a0 = angle(j)
+        val a1 = angle(j + 1)
+        val x0 = cx + corner * sin(a0)
+        val x1 = cx + corner * sin(a1)
+        if (x1 - x0 < 1f) continue // turned away, or edge-on
+        val painted = (j + 1) * turn <= arc + 0.01f
+        val u0 = j * turn / arc
+        val u1 = (j + 1) * turn / arc
+        val left = x0.roundToInt()
+        val right = x1.roundToInt()
+        val slice = max(1, (r / 220f).roundToInt())
+        var px = left
+        while (px < right) {
+            val next = min(right, px + slice)
+            val q0 = (px - x0) / (x1 - x0)
+            val q1 = (next - x0) / (x1 - x0)
+            val mid = ((q0 + q1) / 2f).coerceIn(0f, 1f)
+            val at = IntOffset(px, (top + sink * (cos(a0) + mid * (cos(a1) - cos(a0)))).roundToInt())
+            val box = IntSize(next - px, body)
+            if (!painted) {
+                drawRect(BARE, Offset(at.x.toFloat(), at.y.toFloat()), Size(box.width.toFloat(), box.height.toFloat()))
+            } else {
+                val sx0 = ((u0 + q0.coerceIn(0f, 1f) * (u1 - u0)) * bitmap.width).roundToInt().coerceIn(0, bitmap.width - 1)
+                val sx1 = ((u0 + q1.coerceIn(0f, 1f) * (u1 - u0)) * bitmap.width).roundToInt().coerceIn(sx0 + 1, bitmap.width)
+                drawImage(
+                    bitmap,
+                    srcOffset = IntOffset(sx0, 0),
+                    srcSize = IntSize(sx1 - sx0, bitmap.height),
+                    dstOffset = at,
+                    dstSize = box,
+                    filterQuality = FilterQuality.Medium,
+                )
+            }
+            // A face turned from the viewer catches less light, all of it alike.
+            drawRect(
+                Color.Black.copy(alpha = SHADE * (1f - cos((a0 + a1) / 2f)).coerceIn(0f, 1f)),
                 Offset(at.x.toFloat(), at.y.toFloat()), Size(box.width.toFloat(), box.height.toFloat()),
             )
             px = next

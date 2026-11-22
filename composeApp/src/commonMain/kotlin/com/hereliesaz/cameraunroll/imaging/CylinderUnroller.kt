@@ -105,8 +105,18 @@ object CylinderUnroller {
         val w = photo.width.toFloat()
         val h = photo.height.toFloat()
         val cx = (g.left + g.right) * w / 2f
-        val d = Perspective.distance((g.right - g.left) * w / 2f, focalPx)
-        val scale = Perspective.frontScale(d, focalPx)
+        // Where the rims' bulge would vanish: the row the camera looks along. (The rims were
+        // drawn for a straight pillar as wide as the guides, so that is the distance they hold.)
+        val straight = Perspective.distance((g.right - g.left) * w / 2f, focalPx)
+        val horizon = ((g.topY - straight * g.topBulge) + (g.bottomY - straight * g.bottomBulge)) / 2f * h
+        // A pillar whose radius changes has no one radius to measure by. The guides give it
+        // where they happen to sit in the frame, which changes as the phone is tipped; the
+        // radius at the camera's own height does not, so that one is the unit, for every photo.
+        val atEye = profile?.let { radiusAt(it, horizon / h) } ?: 1f
+        val d = if (atEye == 1f) straight else Perspective.distance((g.right - g.left) * w / 2f * atEye, focalPx)
+        // The guides' rows count heights in the radius they were drawn for; those same numbers
+        // are kept as heights in the unit above, so every photo's strip covers the same stretch.
+        val scale = Perspective.frontScale(straight, focalPx)
         val limit = Perspective.tangentAngle(d) - TANGENT_MARGIN
         val thetaMax = min((maxAngleDeg.coerceIn(5f, 89f) * PI / 180.0).toFloat(), max(0.1f, limit))
 
@@ -124,8 +134,6 @@ object CylinderUnroller {
             weight[ox] = max(0f, (d * c - 1f) / (d - 1f))
         }
         val edge = Perspective.tangentAngle(d)
-        // Where the rims' bulge would vanish: the row the camera looks along.
-        val horizon = ((g.topY - d * g.topBulge) + (g.bottomY - d * g.bottomBulge)) / 2f * h
         for (oy in 0 until outH) {
             val v = (oy + 0.5f) / outH
             // Leftover lean: this row is read a little to one side, in surface angle.
@@ -136,14 +144,16 @@ object CylinderUnroller {
                 // sideways and how far the row sits from the horizon; columns stay uniform in
                 // angle, so a swelling is flattened like the rest.
                 val front = frontTop + v * (frontBottom - frontTop)
-                val rho = radiusAt(profile, front / h)
+                // The profile was read off the silhouette, which lies deeper into the pillar than
+                // its front and so shows this same height a little nearer the horizon.
+                val rho = radiusAt(profile, (horizon + (front - horizon) * (straight - 1f) / (d - 1f / d)) / h) / atEye
                 val rowEdge = Perspective.tangentAngle(d / rho)
                 for (ox in 0 until outW) {
                     val theta = -thetaMax + (ox + 0.5f) / outW * 2f * thetaMax - lean
                     if (theta <= -rowEdge || theta >= rowEdge) continue
                     val c = cos(theta)
                     val sx = cx + focalPx * rho * sin(theta) / (d - rho * c)
-                    val sy = horizon + (front - horizon) * (d - 1f) / (d - rho * c)
+                    val sy = horizon + (front - horizon) * (straight - 1f) / (d - rho * c)
                     out[ox, oy] = photo.sampleCubic(sx, sy)
                 }
                 continue

@@ -56,9 +56,11 @@ object CaptureGuide {
      *   should match (same width = same distance); null before the first photo
      * @param stepDeg how far around the pillar the camera has come since the last photo;
      *   null before the first photo, NaN when the view no longer overlaps that photo
+     * @param ownTaper how much the pillar's sides converge by themselves ([Reading.taper] of a
+     *   pillar that tapers, seen with the phone held level); tilt is judged against it
      * @return what to fix, or null when everything is right and the photo should be taken
      */
-    fun assess(reading: Reading?, reference: Float?, stepDeg: Float?): Fault? {
+    fun assess(reading: Reading?, reference: Float?, stepDeg: Float?, ownTaper: Float = 0f): Fault? {
         reading ?: return Fault.NoPillar
         if (reading.center < 0.5f - OFF_CENTER) return Fault.AimLeft
         if (reading.center > 0.5f + OFF_CENTER) return Fault.AimRight
@@ -67,8 +69,8 @@ object CaptureGuide {
         if (reading.width < narrowest) return Fault.StepCloser
         if (abs(reading.leanDeg) > MAX_LEAN_DEG) return Fault.Straighten
         // Wider toward the bottom means it narrows upward: the phone is tipped up.
-        if (reading.taper > MAX_TAPER) return Fault.TiltDown
-        if (reading.taper < -MAX_TAPER) return Fault.TiltUp
+        if (reading.taper - ownTaper > MAX_TAPER) return Fault.TiltDown
+        if (reading.taper - ownTaper < -MAX_TAPER) return Fault.TiltUp
         if (stepDeg != null) {
             if (stepDeg.isNaN()) return Fault.Lost
             if (abs(stepDeg) < MIN_STEP_DEG) return Fault.KeepWalking
@@ -97,6 +99,13 @@ object CaptureGuide {
         // The face spans 2·FACE_ARC_DEG across its width.
         return link.dx / a.width * 2f * FACE_ARC_DEG
     }
+
+    /**
+     * How long (ms) the guide insists on a tilt before the first photo. Sides that still
+     * converge after that are not the phone's doing: the pillar tapers, and from then on
+     * tilt is judged against how it looked when the guide gave in.
+     */
+    const val TILT_PATIENCE_MS = 4000L
 
     /** Degrees of pillar one photo covers by itself, for the progress ring. */
     const val PHOTO_ARC_DEG = 120f

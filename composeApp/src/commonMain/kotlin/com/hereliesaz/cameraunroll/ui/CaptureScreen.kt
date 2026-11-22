@@ -82,6 +82,9 @@ fun CaptureScreen(onDone: (List<ByteArray>) -> Unit, modifier: Modifier = Modifi
         var lastFace: RgbaImage? = null
         var lastAngle = 0f
         var goodSince: TimeSource.Monotonic.ValueTimeMark? = null
+        // A pillar that tapers looks like a tipped phone; see [CaptureGuide.TILT_PATIENCE_MS].
+        var tiltSince: TimeSource.Monotonic.ValueTimeMark? = null
+        var ownTaper = 0f
         while (isActive) {
             val img = CameraSource.preview(PREVIEW_DIM)
             if (img == null) { delay(100); continue }
@@ -96,7 +99,14 @@ fun CaptureScreen(onDone: (List<ByteArray>) -> Unit, modifier: Modifier = Modifi
             // With no pillar in view the walk is unknown, not lost: the "aim" hint comes first.
             stepDeg = if (lastFace == null) null else step ?: Float.NaN
             if (step != null && !step.isNaN()) here = lastAngle + step
-            val f = CaptureGuide.assess(r, reference, stepDeg)
+            var f = CaptureGuide.assess(r, reference, stepDeg, ownTaper)
+            if (r != null && shots.isEmpty() && (f == CaptureGuide.Fault.TiltDown || f == CaptureGuide.Fault.TiltUp)) {
+                val since = tiltSince ?: TimeSource.Monotonic.markNow().also { tiltSince = it }
+                if (since.elapsedNow().inWholeMilliseconds >= CaptureGuide.TILT_PATIENCE_MS) {
+                    ownTaper = r.taper
+                    f = CaptureGuide.assess(r, reference, stepDeg, ownTaper)
+                }
+            } else tiltSince = null
             fault = f
             if (f != null || face == null || r == null) {
                 goodSince = null

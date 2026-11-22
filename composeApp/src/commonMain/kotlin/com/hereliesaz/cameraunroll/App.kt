@@ -272,6 +272,10 @@ private fun Editor(state: AppState, addPhotos: () -> Unit, addVideo: () -> Unit,
                     TextButton(onClick = state::autoGuides, enabled = !state.busy) { Text("AUTO-DETECT") }
                     TextButton(onClick = state::applyGuidesToAll, enabled = !state.busy) { Text("APPLY TO ALL") }
                     TextButton(onClick = state::arrange, enabled = !state.busy && state.canArrange) { Text("ORDER") }
+                    // Round pillar or four-sided beam: the photos decide unless told otherwise.
+                    TextButton(onClick = state::nextShape, enabled = !state.busy) {
+                        Text(if (state.shape == Shape.Auto) "SHAPE: AUTO · ${if (state.beam) "BEAM" else "ROUND"}" else "SHAPE: ${state.shape.label}")
+                    }
                 }
             }
             else -> {
@@ -434,7 +438,7 @@ private fun ResultView(result: Result, onBack: () -> Unit, onSave: () -> Unit) {
             TabLabel("PILLAR", pillar, modifier = Modifier.weight(1f)) { pillar = true }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (pillar && canWrap) PillarViewer(result.bitmap, arc!!, heightRadii!!, Modifier.fillMaxSize())
+            if (pillar && canWrap) PillarViewer(result.bitmap, arc!!, heightRadii!!, Modifier.fillMaxSize(), sides = result.rendered.sides)
             else StripViewer(result.bitmap, result.rendered.wraps, Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.BottomCenter) {
                 Text(

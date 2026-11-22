@@ -85,8 +85,8 @@ object DepthSides {
      * top of the frame to the bottom, relative to the straight-sided pillar [measure] fits.
      * Null when the sides are straight to within a few percent, which is nearly always.
      *
-     * Only the bend of the sides is read. A steady taper looks exactly like the phone being
-     * tipped, and a photo alone cannot tell them apart, so a taper is left to the leveler.
+     * Only the bend of the sides is read. A steady taper is a different question, asked of
+     * the depth and of the whole set: see [taper].
      */
     fun profile(depth: RgbaImage): FloatArray? {
         val rows = rows(depth, SHAPE_SLACK) ?: return null
@@ -127,6 +127,73 @@ object DepthSides {
             ((c0 + c2 * u * u) / c0).coerceIn(0.6f, 1.4f)
         }
     }
+
+    /**
+     * What one photo says about whether the pillar itself narrows or widens along its
+     * height, before the set of photos is asked ([taperConsensus]).
+     *
+     * Sides that converge mean one of two things: the pillar tapers, or the phone was tipped.
+     * Tipped, the narrow end is narrow because it is farther away, and the depth image shows
+     * it receding by the same proportion. Tapered, it is narrow though no farther. So the
+     * taper is the part of the width's change that the depth's change does not account for.
+     */
+    fun taper(depth: RgbaImage): Taper? {
+        val rows = rows(depth, TAPER_SLACK) ?: return null
+        val w = depth.width
+        val h = depth.height
+        val (la, ls) = line(rows.ys, rows.lefts)
+        val (ra, rs) = line(rows.ys, rows.rights)
+        if (ra - la < w / 12f) return null
+        val widthChange = (rs - ls) * h / (ra - la)
+        // Nearness down the pillar's middle, as a logarithm so that its slope is a proportion.
+        val logs = rows.ys.indices.map { i ->
+            val y = (rows.ys[i] + h / 2f).toInt().coerceIn(0, h - 1)
+            val mid = (rows.lefts[i] + rows.rights[i]) / 2f
+            val reach = kotlin.math.max(1, ((rows.rights[i] - rows.lefts[i]) * 0.1f).toInt())
+            var sum = 0f
+            for (x in (mid - reach).toInt()..(mid + reach).toInt()) sum += depth.pixels[y * w + x.coerceIn(0, w - 1)] and 0xFF
+            kotlin.math.ln(kotlin.math.max(1f, sum / (2 * reach + 1)))
+        }
+        val (_, slope) = line(rows.ys, logs)
+        return Taper(widthChange, widthChange - slope * h)
+    }
+
+    /**
+     * @property widthChange how much wider the pillar is at the bottom of the frame than at the
+     *   top, as a share of its width (negative: narrower)
+     * @property unexplained the part of [widthChange] that the pillar's receding does not account for
+     */
+    class Taper(val widthChange: Float, val unexplained: Float)
+
+    /**
+     * The one taper a set of photos of the same pillar agrees on (as [Taper.widthChange]), or 0.
+     *
+     * Whether it tapers: a pillar's taper is in every photo of it, and a single reading is
+     * rough, so most photos must show an unexplained change the same way, and a large one.
+     * By how much: the depth image is too coarse a ruler for that. But the phone is tipped
+     * differently in every photo and the pillar tapers the same in all, so the taper is the
+     * width change the photos have in common: their middle value.
+     */
+    fun taperConsensus(tapers: List<Taper?>): Float {
+        val found = tapers.filterNotNull()
+        if (found.size < 3 || found.size < MAJORITY * tapers.size) return 0f
+        val middle = found.map { it.unexplained }.sorted()[found.size / 2]
+        if (kotlin.math.abs(middle) < MIN_TAPER) return 0f
+        val agree = found.count { it.unexplained * middle > 0f && kotlin.math.abs(it.unexplained) > MIN_TAPER / 2f }
+        if (agree < AGREED * found.size) return 0f
+        val common = found.map { it.widthChange }.sorted()[found.size / 2]
+        return if (common * middle > 0f) common.coerceIn(-MAX_TAPER, MAX_TAPER) else 0f
+    }
+
+    /** The radius down the frame ([PROFILE_SAMPLES] values, top to bottom) of a pillar with that [taper]. */
+    fun taperProfile(taper: Float): FloatArray? =
+        if (taper == 0f) null else FloatArray(PROFILE_SAMPLES) { 1f + taper * (it.toFloat() / (PROFILE_SAMPLES - 1) - 0.5f) }
+
+    private const val TAPER_SLACK = 0.45f
+    /** Unexplained width change, top of frame to bottom, below which a pillar counts as straight. */
+    private const val MIN_TAPER = 0.2f
+    private const val MAX_TAPER = 0.8f
+    private const val AGREED = 0.75f
 
     const val PROFILE_SAMPLES = 9
 

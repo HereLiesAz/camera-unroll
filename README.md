@@ -23,7 +23,7 @@ Both results open in a viewer that drags/flings horizontally and, when closed in
 
 ### Guided capture (web, Android)
 
-**CAMERA** opens the rear camera with the pillar's place drawn on the view: a ghost column to fit the real one into. While the pillar is centered, upright enough and the right size, the column turns solid and a ring fills; when it closes, the photo is taken. No shutter. After each photo a bar shows the walk to the next spot (about 30° around; the app compares the live view with the last photo to tell), a plan view of the pillar fills in with what has been covered, and one short line says what to fix (`step back`, `keep walking around`). **DONE** hands the photos to the editor. Tolerances are loose: the unroll corrects lean, tilt and distance by itself.
+**CAMERA** opens the rear camera with the pillar's place drawn on the view: a ghost column to fit the real one into. While the pillar is centered, upright enough and the right size, the column turns solid and a ring fills; when it closes, the photo is taken. No shutter. After each photo a bar shows the walk to the next spot (about 30° around; the app compares the live view with the last photo to tell), a plan view of the pillar fills in with what has been covered, and one short line says what to fix (`step back`, `keep walking around`). **DONE** hands the photos to the editor. Tolerances are loose: the unroll corrects lean, tilt and distance by itself. A pillar that tapers looks like a tipped phone; if `tip the phone` cannot be satisfied for a few seconds before the first photo, the guide takes the convergence to be the pillar's own and judges tilt against it from then on.
 
 - **Web:** needs HTTPS and camera permission; photos are frames of the video stream.
 - **Android:** CameraX; asks for the camera when first used; photos are real full-resolution stills with EXIF, so the lens's focal length is known.
@@ -54,17 +54,30 @@ On import each photo is handled without being asked:
 - **Tilt:** the sides' common lean is the phone's roll and their convergence its pitch; the photo is rotated and warped (visible in **Rotate** / **Warp**) until the pillar stands upright with parallel sides.
 - **Distance:** the pillar's width in frame and the lens (EXIF 35 mm focal length, 26 mm assumed) give the camera's distance. The unroll is a true perspective one, every strip comes out at the same scale, and all photos are given the same stretch of pillar above and below the horizon, so shots taken nearer, farther or tipped differently still line up.
 
+The sides come from the depth image, which is small and soft, and are then moved onto the photo's own crisp edge nearby.
+
 **AUTO-DETECT** redoes this for the current photo. Rims you can't see in frame are placed by geometry, not detected.
 
 ### Automatic order
 
 Photos are put left to right along the surface on import (and by **ORDER**), whatever order they were taken or picked in. Each is flattened, and every pair is matched (on texture, which lighting cannot fool, backed by plain brightness, which a repeating pattern cannot). The most trustworthy matches that connect everything give each photo a position; sorting by position is the order. Walking back and forth, or shooting the same spot twice, is fine. Capture order breaks ties, and metadata (EXIF time, else the number in the file name) is the whole answer when nothing overlaps. Video frames are never reordered.
 
+### Four-sided beams
+
+A square column is not unrolled by angle; it is four planes, and each is flattened exactly. **SHAPE** cycles AUTO / ROUND / BEAM. On AUTO the photos decide: around a round pillar the nearest point of its depth cross-section stays in the middle, while around a beam a corner sweeps from side to side and, between corners, a face shows flat.
+
+- **Where the camera stood:** each photo shows one face (two vertical edges) or two faces meeting at the nearest corner (three). Where those edges fall in the frame fixes the camera's distance, sideways offset, and how far the beam is turned, so every point of each visible face has a known place in the photo.
+- **Which face is which:** two faces in one photo are neighbors, left then right; faces from different photos that look alike (by what is painted on them, not their lighting or the floor at their foot) are the same face. Those two kinds of link sort every face into one of four places. Photo order does not matter, and **ORDER** is skipped.
+- **Lining up:** every pair of photos that share a face is compared high and low on it, and each photo gets the one shift and one stretch that make them all agree.
+- **One photo per face:** each face is taken whole from the photo that sees it most squarely and closely; other photos only fill rows it did not reach. Nothing is blended inside a face, and the joins fall on the beam's own corners.
+- The **PILLAR** view folds the result around a square column. A face no photo matched is left out; the result then says how far around it goes.
+
 ### Stitching
 
 - **Placement:** the stitcher finds positions the same way, so it does not depend on the thumbnail order, and it leaves out a photo taken almost where another was. Each pair is matched twice, by correlation and by matched marks (corners described by the texture around them, voting for a slide); marks confirm or overrule correlation, and a match they do not back has to be strong to count. Positions are then solved from every believed match at once, not chained neighbor to neighbor.
 - **Full height:** each photo gives all the pillar it shows, not just the stretch every photo shares. A row is kept if some photo paints every column of it; strips fade out where they end.
-- **Shape:** if most photos agree the pillar swells or pinches along its height, the unroll follows that radius row by row. A steady taper cannot be told from a tipped phone and is treated as tilt.
+- **Shape:** if most photos agree the pillar swells or pinches along its height, the unroll follows that radius row by row.
+- **Taper:** sides that converge mean a tapering pillar or a tipped phone. Tipped, the narrow end is narrow because it is farther, and the depth image shows it receding by the same share; tapered, it is narrow though no farther. If most photos show convergence their depth does not explain, the pillar tapers by the width change the photos have in common (the phone is tipped differently in each; the pillar is the same in all). Each photo is then leveled only for what is left over, and unrolled as a cone, measured in the radius at the camera's own height.
 - **Second pass:** what still separates neighbors after geometry (a degree of lean, a few percent of size) is measured band by band on the strips and unrolled away.
 - **Registration:** across each overlap the leftover disagreement is measured block by block, and both photos are bent to meet exactly at the cut.
 - **One photo per place:** nothing is averaged. A cut runs through each overlap where the two photos differ least; detail switches photo at the cut, while lighting and color (exposure-matched first) fade across the whole overlap.
@@ -135,6 +148,7 @@ iOS: open an Xcode project at `iosApp/` whose target embeds the `ComposeApp` fra
 
 - Unroll assumes a near-orthographic view with the axis vertical in frame. Shoot from a few diameters away; telephoto beats wide.
 - Pillar strips are placed by sliding (up to 30% of their height vertically, so raising, lowering or tipping the phone between shots is absorbed), then each is corrected for leftover lean and size, and neighbors are bent to meet at the cut. Panoramas still allow about 10% of vertical drift.
-- A tapering pillar (a cone) is flattened as if it were a cylinder seen by a tipped phone.
+- A taper needs the depth model and at least three photos that agree, and its size rests on the phone being tipped up in about as many photos as down. A lone photo of a tapering pillar, or a set all shot looking up, is still flattened as a cylinder seen by a tipped phone.
+- Beams: square columns only (four equal faces, vertical edges). A tapering beam, a rectangular one with unequal faces, or other counts of sides are not modeled. Faces are told apart by what is on them, so four identical faces cannot be sorted. Edges are found automatically and cannot yet be dragged by hand. The guided camera was designed around round pillars; around a beam its width and step cues are approximate.
 - Order is recovered from content, so photos with no overlap, a plain featureless surface, or a surface with exact repeats (evenly spaced identical stripes) can be misordered; check the thumbnails and fix the guides, then press ORDER, or drag the thumbnails into place.
 - Inputs are capped at 1600 px on the long side to stay inside mobile and browser memory.
