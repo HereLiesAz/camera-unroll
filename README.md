@@ -1,4 +1,4 @@
-# Photo Unroll
+# Camera Unroll
 
 Compose Multiplatform app (Android · iOS · Desktop · Web) that flattens what photographs curve.
 
@@ -35,8 +35,16 @@ Depth Anything runs on-device through ONNX Runtime (the model ships in the APK's
 
 ~~~
 ./gradlew :composeApp:assembleDebug     # installable, debug-signed
-./gradlew :composeApp:assembleRelease   # shrunk with R8; unsigned until a signing config is added
+./gradlew :composeApp:assembleRelease   # shrunk with R8; unsigned (the central release signs it)
 ~~~
+
+### CI, releases and versions
+
+Automation follows [HereLiesAz/workflows](https://github.com/HereLiesAz/workflows):
+
+- **CI runs here** (`.github/workflows/ci.yml`): unit tests, web and desktop compile, Android debug and release builds, lint. Each job reports to the central ledger with the shared `ci-report` action.
+- **Releases and deploys run centrally.** No release workflow lives in this repository; `.github/workflow-request.yml` lists what it uses (GitHub Pages for the web app) and requests (a signed Android APK on GitHub Releases), with the build command and artifact paths the central binding needs.
+- **Versions** come from `version.properties` (`versionMajor`/`versionMinor`/`versionPatch` by hand; `versionBuild` stays 0 in source). The Android build takes `-PversionCode` / `-PversionCodeOverride` and `-PversionName` from the central release and derives nothing itself; the release records the published `versionCode` back.
 
 ### Automatic pillar, tilt and distance
 

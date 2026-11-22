@@ -1,4 +1,4 @@
-rootProject.name = "PhotoUnroll"
+rootProject.name = "CameraUnroll"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 pluginManagement {

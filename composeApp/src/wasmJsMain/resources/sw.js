@@ -1,7 +1,7 @@
 // Offline support. Bundle file names are content-hashed and change every build,
 // so nothing is precached: pages go network-first, everything else cache-first,
 // and each response is stored as it is fetched.
-const CACHE = 'photo-unroll-v1';
+const CACHE = 'camera-unroll-v1';
 
 self.addEventListener('install', () => self.skipWaiting());
 

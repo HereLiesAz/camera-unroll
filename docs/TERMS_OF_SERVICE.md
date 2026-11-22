@@ -1,8 +1,8 @@
-# Terms of Service for photo-unroll
+# Terms of Service for camera-unroll
 
 **Effective date:** November 5, 2026
 
-These Terms of Service ("Terms") govern your use of **photo-unroll** (the "App"), maintained through the [photo-unroll repository](https://github.com/HereLiesAz/photo-unroll). By using the App, you agree to these Terms. If you do not agree, do not use the App.
+These Terms of Service ("Terms") govern your use of **camera-unroll** (the "App"), maintained through the [camera-unroll repository](https://github.com/HereLiesAz/camera-unroll). By using the App, you agree to these Terms. If you do not agree, do not use the App.
 
 ## 1. Permitted use
 Use the App only in compliance with applicable laws and the rights of others. Do not use it to access systems, accounts, content, or data without authorization; interfere with other users or services; or distribute malicious content.
@@ -29,6 +29,6 @@ To the extent permitted by applicable law, the App's maintainers are not liable 
 The Terms may be revised by publishing an updated version in this repository. The effective date above identifies this version. Continued use after revised Terms take effect constitutes acceptance to the extent permitted by law.
 
 ## 9. Contact
-For questions about these Terms, open an issue at [photo-unroll issues](https://github.com/HereLiesAz/photo-unroll/issues).
+For questions about these Terms, open an issue at [camera-unroll issues](https://github.com/HereLiesAz/camera-unroll/issues).
 
 These Terms are a general baseline and should be reviewed for app-specific features, distribution channels, and applicable legal requirements before public release.

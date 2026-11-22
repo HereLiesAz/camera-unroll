@@ -84,20 +84,26 @@ kotlin {
     }
 }
 
-// One version for every target, kept in version.properties at the repository root.
+// Versioning follows the HereLiesAz/workflows contract (docs/RELEASE_VERSIONING.md there).
+// version.properties holds the hand-managed major.minor.patch and what the last release
+// recorded. A central release passes the next versionCode as -PversionCode /
+// -PversionCodeOverride and the name as -PversionName; nothing is derived or multiplied here.
 val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
-fun version(key: String) = (appVersion.getProperty(key) ?: "0").toInt()
+fun recorded(key: String) = appVersion.getProperty(key)?.trim()?.takeIf { it.isNotEmpty() }
+fun passed(vararg names: String) = names.firstNotNullOfOrNull { (findProperty(it) as String?)?.trim()?.takeIf(String::isNotEmpty) }
+val appVersionCode = (passed("versionCodeOverride", "versionCode") ?: recorded("versionCode"))?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+val appVersionName = passed("versionNameOverride", "versionName") ?: recorded("versionName")
+    ?: listOf("versionMajor", "versionMinor", "versionPatch", "versionBuild").joinToString(".") { recorded(it) ?: "0" }
 
 android {
-    namespace = "com.hereliesaz.photounroll"
+    namespace = "com.hereliesaz.cameraunroll"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
     defaultConfig {
-        applicationId = "com.hereliesaz.photounroll"
+        applicationId = "com.hereliesaz.cameraunroll"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = version("versionMajor") * 1_000_000 + version("versionMinor") * 10_000 +
-            version("versionPatch") * 100 + version("versionBuild") + 1
-        versionName = "${version("versionMajor")}.${version("versionMinor")}.${version("versionPatch")}"
+        versionCode = appVersionCode
+        versionName = appVersionName
         // Phones (and the x86_64 emulator); the depth runtime ships a native library per ABI.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
@@ -121,10 +127,10 @@ android {
 
 compose.desktop {
     application {
-        mainClass = "com.hereliesaz.photounroll.MainKt"
+        mainClass = "com.hereliesaz.cameraunroll.MainKt"
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "PhotoUnroll"
+            packageName = "CameraUnroll"
             packageVersion = "1.0.0"
         }
     }
