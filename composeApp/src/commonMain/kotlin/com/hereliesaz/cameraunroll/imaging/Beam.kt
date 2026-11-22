@@ -152,18 +152,20 @@ object Beam {
         // --- 3. Each face from the photo that shows it best.
         val faceW = max(2, (2f * pxPerHalf).roundToInt())
         val outH = max(2, ((up + down) * pxPerHalf).roundToInt())
-        val out = RgbaImage(faceW * slots, outH)
         val rendered = HashMap<Int, List<Prism.Face>>()
         fun full(view: Int) = rendered.getOrPut(view) {
             val v = views[view]
             Prism.faces(v.photo, v.pose, v.horizon, v.focalPx, pxPerHalf, up, down, stretch[view], shift[view])
         }
+        val faces = arrayOfNulls<RgbaImage>(slots)
         for (s in 0 until slots) {
             progress(0.6f + 0.4f * s / slots)
             val candidates = biggest.filter { slot(it) == s }
                 .sortedByDescending { pieces[it].face.squarely * views[pieces[it].view].focalPx / pieces[it].face.depth * pieces[it].fine.covered }
             if (candidates.isEmpty()) continue
             val best = candidates[0]
+            // Seen only at a glance, a face is a smear. It is not claimed as captured.
+            if (pieces[best].face.squarely < MIN_SQUARELY) continue
             val face = full(pieces[best].view)[pieces[best].side].image
             var missing = 1f - pieces[best].fine.covered
             for (other in candidates.drop(1).take(FILLS)) {
@@ -171,11 +173,36 @@ object Beam {
                 fill(face, full(pieces[other].view)[pieces[other].side].image)
                 missing = 1f - Gray.of(face).covered
             }
-            for (y in 0 until outH) face.pixels.copyInto(out.pixels, y * out.width + s * faceW, y * faceW, (y + 1) * faceW)
+            faces[s] = face
         }
         progress(1f)
+        // The longest run of faces actually captured, going around the beam when it closes on itself.
+        val run = longestRun(faces.map { it != null }, wraps)
+        require(run.isNotEmpty()) { "No face of the beam is seen squarely enough" }
+        val out = RgbaImage(faceW * run.size, outH)
+        run.forEachIndexed { k, s ->
+            val face = faces[s]!!
+            for (y in 0 until outH) face.pixels.copyInto(out.pixels, y * out.width + k * faceW, y * faceW, (y + 1) * faceW)
+        }
         // One turn of the beam is four faces: the scale, put as pixels per radian of the way around.
-        return Rendered(cropToCovered(out), wraps, xmp = null, pxPerRadian = SIDES * faceW / (2f * PI.toFloat()), sides = SIDES)
+        // Only a beam with all four faces closes into a turn; anything less says how far around it goes.
+        return Rendered(cropToCovered(out), wraps && run.size == slots, xmp = null, pxPerRadian = SIDES * faceW / (2f * PI.toFloat()), sides = SIDES)
+    }
+
+    /** Indices of the longest run of true entries, in order; cyclic (it may pass the end) when [cyclic]. */
+    private fun longestRun(present: List<Boolean>, cyclic: Boolean): List<Int> {
+        val n = present.size
+        if (present.all { it }) return List(n) { it }
+        var best = emptyList<Int>()
+        for (start in 0 until n) {
+            if (!present[start] || (cyclic && present[(start + n - 1) % n])) continue // begin at a run's first face
+            if (!cyclic && start > 0 && present[start - 1]) continue
+            val run = ArrayList<Int>()
+            var i = start
+            while (i < n + (if (cyclic) start else 0) && present[i % n]) { run += i % n; i++ }
+            if (run.size > best.size) best = run
+        }
+        return best
     }
 
     /** Fills what [face] lacks from [other], matched in brightness and faded in over a few rows. */
@@ -327,6 +354,8 @@ object Beam {
     private const val GENTLY = 1e-3
     private const val MAX_STRETCH = 0.12f
     private const val FILLS = 2
+    /** Cosine of the steepest angle a face may be seen at and still count as captured (about 53°). */
+    private const val MIN_SQUARELY = 0.6f
     private const val WORTH_FILLING = 0.02f
     private const val COVERED = 0.995f
 }

@@ -581,6 +581,38 @@ class BeamTest {
     }
 }
 
+class PartialBeamTest {
+    @Test
+    fun aFaceSeenOnlyAtAGlanceIsNotClaimed() {
+        // Faces 0, 1 and 2 are photographed square-on and at corners; face 3 only once, at 79° off its normal.
+        val shots = listOf(Triple(null, 8f, 0), Triple(null, 7.5f, 1), Triple(null, 8f, 2), Triple(0.35f, 7f, 1), Triple(-0.3f, 7.5f, 2), Triple(0.6f, 7f, 3))
+        val out = Pipelines.unrollBeam(
+            shots.map { BeamScene.photo(it.first, it.second, it.third) },
+            shots.map { BeamScene.reading(it.first, it.second) },
+            shots.map { BeamScene.HORIZON / BeamScene.H },
+            shots.map { BeamScene.FOCAL },
+        )
+        assertFalse(out.wraps)
+        assertEquals(4, out.sides)
+        // Three faces of four: 270° of the way around, and the strip's width says so.
+        assertEquals(1.5f * PI.toFloat(), assertNotNull(out.arc), 0.02f)
+    }
+
+    @Test
+    fun aCompleteBeamStillClosesIntoATurn() {
+        // Corner views link neighbors: 0-1, 1-2 and 2-3.
+        val shots = listOf(Triple(null, 8f, 0), Triple(null, 7.5f, 1), Triple(null, 8f, 2), Triple(null, 7f, 3), Triple(0.3f, 7f, 1), Triple(-0.3f, 7.5f, 2), Triple(0.25f, 7f, 3))
+        val out = Pipelines.unrollBeam(
+            shots.map { BeamScene.photo(it.first, it.second, it.third) },
+            shots.map { BeamScene.reading(it.first, it.second) },
+            shots.map { BeamScene.HORIZON / BeamScene.H },
+            shots.map { BeamScene.FOCAL },
+        )
+        assertTrue(out.wraps)
+        assertEquals(2f * PI.toFloat(), assertNotNull(out.arc), 0.02f)
+    }
+}
+
 class TaperTest {
     /** A depth image of a pillar whose width and nearness both change linearly down the frame. */
     private fun depth(widthChange: Float, nearnessChange: Float): RgbaImage {

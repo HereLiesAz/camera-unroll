@@ -70,7 +70,7 @@ A square column is not unrolled by angle; it is four planes, and each is flatten
 - **Which face is which:** two faces in one photo are neighbors, left then right; faces from different photos that look alike (by what is painted on them, not their lighting or the floor at their foot) are the same face. Those two kinds of link sort every face into one of four places. Photo order does not matter, and **ORDER** is skipped.
 - **Lining up:** every pair of photos that share a face is compared high and low on it, and each photo gets the one shift and one stretch that make them all agree.
 - **One photo per face:** each face is taken whole from the photo that sees it most squarely and closely; other photos only fill rows it did not reach. Nothing is blended inside a face, and the joins fall on the beam's own corners.
-- The **PILLAR** view folds the result around a square column. A face no photo matched is left out; the result then says how far around it goes.
+- The **PILLAR** view folds the result around a square column. A face no photo matched, or that is seen only at a glance (more than about 53° off its normal, where it is stretched 1.7× or more), is not claimed: the result is the longest run of faces captured and says how far around it goes (270° for three of four), and the 3D view leaves the rest bare.
 
 ### Stitching
 
