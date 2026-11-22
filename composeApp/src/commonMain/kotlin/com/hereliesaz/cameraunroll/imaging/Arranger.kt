@@ -20,13 +20,13 @@ object Arranger {
      * [rank] (optional, from metadata: capture time or file-name sequence) decides only when
      * the pictures cannot: with no overlap anywhere, the rank order is returned as is.
      */
-    fun order(strips: List<RgbaImage>, progress: (Float) -> Unit = {}, rank: IntArray? = null): IntArray {
+    fun order(strips: List<RgbaImage>, progress: (Float) -> Unit = {}, rank: IntArray? = null, maxDy: Float = Stitcher.MAX_DY): IntArray {
         val n = strips.size
         val byRank = rank?.let { r -> (0 until n).sortedBy { r[it] }.toIntArray() } ?: IntArray(n) { it }
         if (n <= 2) return byRank
         // One height for all, as the stitcher will see them.
         val h = min(Stitcher.FINE_H, strips.map { it.height }.sorted()[n / 2])
-        val seq = Stitcher.sequence(strips.map { it.resized(max(2, (it.width.toFloat() * h / it.height).roundToInt()), h) }, progress = progress)
+        val seq = Stitcher.sequence(strips.map { it.resized(max(2, (it.width.toFloat() * h / it.height).roundToInt()), h) }, maxDy, progress)
         return if (seq.matched) seq.order else byRank
     }
 

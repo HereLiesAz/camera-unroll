@@ -26,6 +26,13 @@ class Rendered(val image: RgbaImage, val wraps: Boolean, private val xmp: String
 
 /** The user-facing operations, end to end. CPU-bound; call off the main thread. */
 object Pipelines {
+    /**
+     * How far above or below its neighbor a hand-held pillar strip may sit (fraction of its
+     * height). Each strip's vertical place rests on an estimated horizon, and a photographer who
+     * raises, lowers or tips the phone between shots moves it by far more than a steady sweep does.
+     */
+    private const val HANDHELD_DY = 0.3f
+
 
     /**
      * Capture order of [photos], recovered from how their flattened strips overlap. Needs the
@@ -42,6 +49,7 @@ object Pipelines {
         photos.indices.map { CylinderUnroller.unroll(photos[it], guides[it], maxAngleDeg, focalPx?.get(it)).image },
         progress,
         rank,
+        if (focalPx != null) HANDHELD_DY else Stitcher.MAX_DY,
     )
 
     fun arrangePanorama(photos: List<RgbaImage>, hfovDeg: Float, progress: (Float) -> Unit = {}, rank: IntArray? = null): IntArray =
@@ -75,7 +83,7 @@ object Pipelines {
         // Second pass: what still separates neighbors after geometry (a degree of lean, a few
         // percent of size) is measured on the strips and unrolled away.
         if (perspective && strips.size >= 2) {
-            val fixes = Stitcher.corrections(strips.map { it.image })
+            val fixes = Stitcher.corrections(strips.map { it.image }, HANDHELD_DY)
             strips = photos.indices.map { i ->
                 progress(0.15f + 0.15f * i / photos.size)
                 CylinderUnroller.unroll(photos[i], guides[i], maxAngleDeg, focalPx!![i], fixes[i], scale)
@@ -83,7 +91,7 @@ object Pipelines {
         }
         if (trimToTurn && fullTurn) strips = strips.take(Arranger.framesInOneTurn(strips.map { it.image }))
         val result = if (strips.size == 1) StitchResult(strips[0].image, false, null)
-        else Stitcher.stitch(strips, fullTurn, Stitcher.MAX_DY) { progress(0.3f + 0.7f * it) }
+        else Stitcher.stitch(strips, fullTurn, if (perspective) HANDHELD_DY else Stitcher.MAX_DY) { progress(0.3f + 0.7f * it) }
         // Strips are uniform in surface angle and carry their scale, so the result's width
         // says how far around the pillar it goes.
         val ppr = result.pxPerRadian ?: strips[0].pxPerRadian

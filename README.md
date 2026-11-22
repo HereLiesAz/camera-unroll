@@ -132,6 +132,6 @@ iOS: open an Xcode project at `iosApp/` whose target embeds the `ComposeApp` fra
 ## Limits
 
 - Unroll assumes a near-orthographic view with the axis vertical in frame. Shoot from a few diameters away; telephoto beats wide.
-- Stitching aligns by translation only. Keep height and distance constant; vertical drift up to ~6% is absorbed.
+- Pillar strips are placed by sliding (up to 30% of their height vertically, so raising, lowering or tipping the phone between shots is absorbed), then each is corrected for leftover lean and size, and neighbors are bent to meet at the cut. What is kept is the stretch of pillar every photo shows, so the more the height drifts, the shorter the result. Panoramas still allow about 10% of vertical drift.
 - Order is recovered from content, so photos with no overlap, a plain featureless surface, or a surface with exact repeats (evenly spaced identical stripes) can be misordered; check the thumbnails and fix the guides, then press ORDER, or drag the thumbnails into place.
 - Inputs are capped at 1600 px on the long side to stay inside mobile and browser memory.
