@@ -1,30 +1,32 @@
 # CENTRAL WORKFLOW MENU / REQUEST
 #
-# Do not implement a new workflow under .github/workflows here.
-# New implementations are submitted to HereLiesAz/workflows.
+# This file is documentation/request metadata, not executable GitHub Actions.
 #
-# A submitted implementation MUST:
-#   1. be repository-agnostic;
-#   2. parameterize repository-specific names, paths, branches, packages and releases;
-#   3. reuse existing secrets when possible;
-#   4. declare every new required secret by exact name and plain-language purpose.
+# POLICY (HereLiesAz/workflows: docs/WORKFLOW_POLICY.md)
+# - Do not add a new implementation under .github/workflows in this repository.
+#   The one exception is this repository's own CI (.github/workflows/ci.yml), which runs
+#   here and declares itself with the ci-report action.
+# - New implementations are submitted to HereLiesAz/workflows first.
+# - New implementations must be repository-agnostic.
+# - Reuse an existing central credential from policy/workflow-policy.json whenever possible.
+# - If a new one is unavoidable, declare its exact name and plain-language purpose.
 #
-# AVAILABLE GENERAL WORKFLOWS
+# GENERAL
 #   ci-validation              build/test/validation
 #   codeql-scan               CodeQL security scan
 #   issue-summary             issue summarization
 #   jules-dispatch            Jules request dispatch
-#   jules-glee                Jules PR Glee audit
+#   jules-glee                Codex PR Glee audit
 #   jules-auto-assign         Jules issue assignment
 #   context-backup            repository context backup
 #   clear-cache               cache cleanup
 #
-# AVAILABLE ANDROID WORKFLOWS
+# ANDROID
 #   android-dependency-update managed Android native dependency refresh
 #   android-github-release    build/sign APK and publish GitHub release
 #   android-play-release      build/sign AAB and publish to Google Play
 #
-# AVAILABLE RELEASE / PACKAGE WORKFLOWS
+# RELEASES / PACKAGES
 #   artifact-github-release   publish existing artifacts to GitHub Releases
 #   multi-platform-app-release build/release a multi-platform application
 #   desktop-package           native desktop packaging
@@ -33,37 +35,38 @@
 #   azp-model-release         managed model asset release
 #   azp-sign-release          release signing
 #
-# AVAILABLE DEPLOYMENT WORKFLOWS
+# DEPLOYMENT
 #   website-sftp-deploy       build/deploy website over SFTP
+#   github-pages-deploy       build a static site and publish it to the repository's own GitHub Pages
+#   cloudflare-worker-deploy  test and deploy a Cloudflare Worker with Wrangler
 #
-# List catalog workflows this repository should use.
-requested: []
+# In use: github-pages-deploy (the wasm PWA; bound, tracker at .github/workflows/github-pages-deploy.yml).
+requested:
+  - android-github-release
 
-# If the needed capability is absent from the menu, describe the GENERAL workflow
-# to add to HereLiesAz/workflows. This is a request, not executable automation.
+# What the central Android GitHub Release binding needs to know about this app (its purpose
+# profile). No new workflow and no new credential: signing reuses the account's existing
+# keystore, passed to Gradle as android.injected.signing.* arguments.
+android-github-release:
+  app_name: Camera Unroll
+  package_name: com.hereliesaz.photounroll
+  java_version: "17"
+  signing: raw-jks
+  inject_signing_args: true
+  google_services: none
+  build_command: >-
+    ./gradlew :composeApp:assembleRelease --no-daemon --stacktrace
+    -PversionName="$VERSION"
+  artifact_glob: composeApp/build/outputs/apk/release/*.apk
+  mapping_file: composeApp/build/outputs/mapping/release/mapping.txt
+  # version.properties at the repository root is the version file (versionMajor/Minor/Patch/Build,
+  # plus the versionCode the release records back). The build reads -PversionCode /
+  # -PversionCodeOverride and -PversionName, as the central android-version action passes them.
+  version_file: version.properties
+  trigger: push to main
+
 new_workflow_request:
-  name: "gradle-pages-deploy"
-  purpose: >-
-    Build a static site with a Gradle task and publish its output directory to
-    GitHub Pages via actions/upload-pages-artifact + actions/deploy-pages.
-    Here: the Compose Multiplatform wasm PWA.
-  required_inputs:
-    - name: gradle_task
-      purpose: Task that produces the static site.
-      example: ":composeApp:wasmJsBrowserDistribution"
-    - name: site_dir
-      purpose: Directory the task writes the site to, uploaded as the Pages artifact.
-      example: "composeApp/build/dist/wasmJs/productionExecutable"
-    - name: java_version
-      purpose: JDK for the Gradle build.
-      example: "17"
-    - name: branch
-      purpose: Branch whose pushes trigger a deploy.
-      example: "main"
-  required_permissions:
-    - "pages: write"
-    - "id-token: write"
-    - "contents: read"
-  required_secrets:
-    # None: deploy-pages authenticates with the built-in GITHUB_TOKEN via OIDC.
-    []
+  name: ""
+  purpose: ""
+  required_inputs: []
+  required_secrets: []

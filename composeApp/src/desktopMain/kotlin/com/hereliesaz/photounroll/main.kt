@@ -8,7 +8,7 @@ import androidx.compose.ui.window.rememberWindowState
 fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
-        title = "Photo Unroll",
+        title = "Camera Unroll",
         state = rememberWindowState(width = 1100.dp, height = 800.dp),
     ) { App() }
 }

@@ -6,7 +6,7 @@
 
     <!-- largeHeap: a set of photos, their strips and the canvas they are composed on are all in memory at once. -->
     <application
-        android:label="Photo Unroll"
+        android:label="Camera Unroll"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="true"
         android:supportsRtl="true"
