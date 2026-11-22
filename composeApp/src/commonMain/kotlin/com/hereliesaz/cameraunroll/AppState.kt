@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import com.hereliesaz.cameraunroll.imaging.CylinderGuides
 import com.hereliesaz.cameraunroll.imaging.DepthModel
+import com.hereliesaz.cameraunroll.imaging.DepthSides
 import com.hereliesaz.cameraunroll.imaging.EdgeSuggester
 import com.hereliesaz.cameraunroll.imaging.Exif
 import com.hereliesaz.cameraunroll.imaging.Leveler
@@ -60,6 +61,18 @@ class Photo(
     var rimsSeen = fromVideo
         internal set
     val focalPx: Float get() = Perspective.focalPx(focal35, original.width, original.height)
+
+    /** The pillar's radius down the frame when it is not a true cylinder ([DepthSides.profile]); else null. */
+    internal var profile: FloatArray? = null
+    /** What this photo alone suggests for [profile], before the set is asked. */
+    internal var measuredProfile: FloatArray? = null
+
+    /** The rims as detection last placed them; while they still stand, they were not chosen by hand. */
+    internal var autoGuides: CylinderGuides? = null
+    val rimsByHand: Boolean
+        get() = autoGuides?.let { a ->
+            a.topY != guides.topY || a.bottomY != guides.bottomY || a.topBulge != guides.topBulge || a.bottomBulge != guides.bottomBulge
+        } ?: true
     /** Stable list key (thumbnails keep their gesture state while being reordered). */
     val id: Long = nextId++
     var guides by mutableStateOf(guides)
@@ -150,7 +163,9 @@ class AppState(private val scope: CoroutineScope) {
         photo.horizon = level.horizon
         val found = withContext(Dispatchers.Default) {
             // The depth image is bent the same way the photo was, so it still lies over it.
-            EdgeSuggester.detect(photo.image, photo.focal35, level.horizon, depth?.let { level.adjust.apply(it) })
+            val leveled = depth?.let { level.adjust.apply(it) }
+            photo.measuredProfile = leveled?.let { DepthSides.profile(it) }
+            EdgeSuggester.detect(photo.image, photo.focal35, level.horizon, leveled)
         }
         photo.guides = found.guides
         photo.rimsSeen = found.rimsSeen
@@ -161,12 +176,15 @@ class AppState(private val scope: CoroutineScope) {
      * (see [Perspective.harmonize]). Photos with visible rims already agree: rim to rim.
      */
     private fun harmonize() {
+        // A shape is believed only if the set agrees on it (see [DepthSides.consensus]).
+        val shape = DepthSides.consensus(photos.filter { !it.fromVideo }.map { it.measuredProfile })
+        photos.forEach { it.profile = if (it.fromVideo) null else shape }
         val loose = photos.filter { !it.rimsSeen }
         if (loose.isEmpty() || loose.size != photos.count { !it.fromVideo }) return
         val out = Perspective.harmonize(
             loose.map { it.guides }, loose.map { it.image.width to it.image.height }, loose.map { it.focalPx }, loose.map { it.horizon },
         )
-        loose.forEachIndexed { i, p -> p.guides = out[i] }
+        loose.forEachIndexed { i, p -> p.guides = out[i]; p.autoGuides = out[i] }
     }
 
     /**
@@ -278,9 +296,15 @@ class AppState(private val scope: CoroutineScope) {
                 val report: (Float) -> Unit = { progress = it }
                 when (m) {
                     Mode.Unroll -> {
+                        // Rims that geometry placed (the pillar runs out of frame) are no one's
+                        // choice, so each photo gives all the pillar it shows. Rims found in the
+                        // photo, or moved by hand, are kept as they are.
+                        val fullHeight = snapshot.none { it.rimsSeen || it.rimsByHand }
                         fun render(full: List<RgbaImage>, from: Float) = Pipelines.unrollCylinder(
                             full, snapshot.map { it.guides }, unrollAngle, fullTurn, trim, { report(from + (1f - from) * it) },
                             full.indices.map { Perspective.focalPx(snapshot[it].focal35, full[it].width, full[it].height) },
+                            fullHeight,
+                            snapshot.map { it.profile },
                         )
                         try {
                             // The result is made from larger, sharper copies than the ones edited on

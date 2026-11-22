@@ -44,6 +44,8 @@ object CylinderUnroller {
      * @param pxPerRadius output scale (perspective view only). Photos taken at different
      *   distances given the same value yield strips of the same size, with no second resampling;
      *   null keeps this photo's own scale on the surface nearest the camera.
+     * @param profile the pillar's radius down the frame, relative to its guides' (perspective
+     *   view only; see [DepthSides.profile]); null for a true cylinder.
      */
     fun unroll(
         photo: RgbaImage,
@@ -52,8 +54,9 @@ object CylinderUnroller {
         focalPx: Float? = null,
         correction: Stitcher.Correction? = null,
         pxPerRadius: Float? = null,
+        profile: FloatArray? = null,
     ): WeightedStrip {
-        if (focalPx != null) return unrollPerspective(photo, guides, maxAngleDeg, focalPx, correction ?: Stitcher.Correction(), pxPerRadius)
+        if (focalPx != null) return unrollPerspective(photo, guides, maxAngleDeg, focalPx, correction ?: Stitcher.Correction(), pxPerRadius, profile)
         val g = guides.normalized()
         require(g.isValid) { "Guides do not enclose a cylinder" }
         val w = photo.width.toFloat()
@@ -85,6 +88,7 @@ object CylinderUnroller {
 
     private fun unrollPerspective(
         photo: RgbaImage, guides: CylinderGuides, maxAngleDeg: Float, focalPx: Float, fix: Stitcher.Correction, pxPerRadius: Float?,
+        profile: FloatArray?,
     ): WeightedStrip {
         var g = guides.normalized()
         require(g.isValid) { "Guides do not enclose a cylinder" }
@@ -120,10 +124,30 @@ object CylinderUnroller {
             weight[ox] = max(0f, (d * c - 1f) / (d - 1f))
         }
         val edge = Perspective.tangentAngle(d)
+        // Where the rims' bulge would vanish: the row the camera looks along.
+        val horizon = ((g.topY - d * g.topBulge) + (g.bottomY - d * g.bottomBulge)) / 2f * h
         for (oy in 0 until outH) {
             val v = (oy + 0.5f) / outH
             // Leftover lean: this row is read a little to one side, in surface angle.
             val lean = fix.shear * (oy + 0.5f - outH / 2f) / outScale
+            if (profile != null) {
+                // Not a true cylinder: this row's radius is rho times the guides'. The surface
+                // is nearer or farther by that much, which moves both where a given angle lands
+                // sideways and how far the row sits from the horizon; columns stay uniform in
+                // angle, so a swelling is flattened like the rest.
+                val front = frontTop + v * (frontBottom - frontTop)
+                val rho = radiusAt(profile, front / h)
+                val rowEdge = Perspective.tangentAngle(d / rho)
+                for (ox in 0 until outW) {
+                    val theta = -thetaMax + (ox + 0.5f) / outW * 2f * thetaMax - lean
+                    if (theta <= -rowEdge || theta >= rowEdge) continue
+                    val c = cos(theta)
+                    val sx = cx + focalPx * rho * sin(theta) / (d - rho * c)
+                    val sy = horizon + (front - horizon) * (d - 1f) / (d - rho * c)
+                    out[ox, oy] = photo.sampleCubic(sx, sy)
+                }
+                continue
+            }
             for (ox in 0 until outW) {
                 val theta = -thetaMax + (ox + 0.5f) / outW * 2f * thetaMax - lean
                 if (theta <= -edge || theta >= edge) continue // past the silhouette: no surface there
@@ -137,6 +161,13 @@ object CylinderUnroller {
             }
         }
         return WeightedStrip(out, weight, outScale)
+    }
+
+    /** [profile] (evenly spaced from the top of the frame to the bottom) read at height [y] in 0..1. */
+    private fun radiusAt(profile: FloatArray, y: Float): Float {
+        val f = y.coerceIn(0f, 1f) * (profile.size - 1)
+        val i = min(profile.size - 2, f.toInt())
+        return profile[i] + (profile[i + 1] - profile[i]) * (f - i)
     }
 
     /** This photo's own scale on the surface nearest the camera, in pixels per pillar radius. */

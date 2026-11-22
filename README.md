@@ -62,7 +62,9 @@ Photos are put left to right along the surface on import (and by **ORDER**), wha
 
 ### Stitching
 
-- **Placement:** the stitcher finds positions the same way, so it does not depend on the thumbnail order, and it leaves out a photo taken almost where another was.
+- **Placement:** the stitcher finds positions the same way, so it does not depend on the thumbnail order, and it leaves out a photo taken almost where another was. Each pair is matched twice, by correlation and by matched marks (corners described by the texture around them, voting for a slide); marks confirm or overrule correlation, and a match they do not back has to be strong to count. Positions are then solved from every believed match at once, not chained neighbor to neighbor.
+- **Full height:** each photo gives all the pillar it shows, not just the stretch every photo shares. A row is kept if some photo paints every column of it; strips fade out where they end.
+- **Shape:** if most photos agree the pillar swells or pinches along its height, the unroll follows that radius row by row. A steady taper cannot be told from a tipped phone and is treated as tilt.
 - **Second pass:** what still separates neighbors after geometry (a degree of lean, a few percent of size) is measured band by band on the strips and unrolled away.
 - **Registration:** across each overlap the leftover disagreement is measured block by block, and both photos are bent to meet exactly at the cut.
 - **One photo per place:** nothing is averaged. A cut runs through each overlap where the two photos differ least; detail switches photo at the cut, while lighting and color (exposure-matched first) fade across the whole overlap.
@@ -132,6 +134,7 @@ iOS: open an Xcode project at `iosApp/` whose target embeds the `ComposeApp` fra
 ## Limits
 
 - Unroll assumes a near-orthographic view with the axis vertical in frame. Shoot from a few diameters away; telephoto beats wide.
-- Stitching aligns by translation only. Keep height and distance constant; vertical drift up to ~6% is absorbed.
+- Pillar strips are placed by sliding (up to 30% of their height vertically, so raising, lowering or tipping the phone between shots is absorbed), then each is corrected for leftover lean and size, and neighbors are bent to meet at the cut. Panoramas still allow about 10% of vertical drift.
+- A tapering pillar (a cone) is flattened as if it were a cylinder seen by a tipped phone.
 - Order is recovered from content, so photos with no overlap, a plain featureless surface, or a surface with exact repeats (evenly spaced identical stripes) can be misordered; check the thumbnails and fix the guides, then press ORDER, or drag the thumbnails into place.
 - Inputs are capped at 1600 px on the long side to stay inside mobile and browser memory.

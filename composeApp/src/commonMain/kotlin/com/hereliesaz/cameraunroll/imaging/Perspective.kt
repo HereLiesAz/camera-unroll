@@ -75,6 +75,42 @@ object Perspective {
         }
     }
 
+    /**
+     * The same photos, opened up: every photo's rims move out to as far as a typical photo of
+     * the set reaches above and below the horizon. A photo that does not reach that far simply
+     * has nothing there (its strip is transparent in those rows), so the strips still share a
+     * scale and a horizon row, but none is trimmed to the least of the others.
+     * What the result keeps is then decided where the strips are composed, column by column.
+     *
+     * The horizon is read back from each photo's own rims (it is where their bulge would
+     * vanish), so this needs nothing but the guides.
+     */
+    fun extend(guides: List<CylinderGuides>, sizes: List<Pair<Int, Int>>, focalPx: List<Float>): List<CylinderGuides> {
+        if (guides.isEmpty()) return guides
+        class View(val d: Float, val scale: Float, val horizon: Float, val h: Int)
+        val views = guides.indices.map { i ->
+            val (w, h) = sizes[i]
+            val g = guides[i]
+            val d = distance((g.right - g.left) / 2f * w, focalPx[i])
+            val horizon = ((g.topY - d * g.topBulge) + (g.bottomY - d * g.bottomBulge)) / 2f
+            View(d, frontScale(d, focalPx[i]), horizon.coerceIn(-0.5f, 1.5f), h)
+        }
+        // As far as a typical photo reaches. Rows only one or two photos show cannot make a
+        // whole row of the result anyway (it needs every column painted), and carrying them
+        // would only cost memory; rows most photos show are what trimming to the least threw away.
+        fun reach(values: List<Float>): Float = values.sorted()[values.size / 2]
+        val up = reach(views.map { it.horizon * it.h / it.scale })
+        val down = reach(views.map { (1f - it.horizon) * it.h / it.scale })
+        if (up + down < MIN_EXTENT) return guides
+        return guides.indices.map { i ->
+            val v = views[i]
+            val (topY, topBulge) = rim(v.horizon - up * v.scale / v.h, v.horizon, v.d)
+            val (bottomY, bottomBulge) = rim(v.horizon + down * v.scale / v.h, v.horizon, v.d)
+            guides[i].copy(topY = topY, topBulge = topBulge, bottomY = bottomY, bottomBulge = bottomBulge)
+                .takeIf { it.isValid } ?: guides[i]
+        }
+    }
+
     /** Closer than this the visible face is a sliver and the estimate is surely wrong. */
     private const val MIN_DISTANCE = 1.3f
     private const val FRAME_MARGIN = 0.02f

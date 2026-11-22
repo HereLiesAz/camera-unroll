@@ -113,19 +113,23 @@ object Stitcher {
         }
         val canvasW: Int
         if (loop) {
-            canvasW = max(1, links.sumOf { it.dx.toDouble() }.roundToInt())
+            // A whole number of the compositor's coarse cells, so its lighting grid closes on
+            // itself exactly where the image does.
+            canvasW = max(Compositor.GRID, links.sumOf { it.dx.toDouble() }.roundToInt() / Compositor.GRID * Compositor.GRID)
             // Spread vertical drift so the seam closes without a step.
             val drift = links.sumOf { it.dy.toDouble() }.toFloat()
             for (i in 0 until n) ysF[i] -= drift * i / n
         } else {
             canvasW = (0 until n).maxOf { exact[it].roundToInt() + strips[it].image.width }
         }
-        val yMean = ysF.average().toFloat()
-        // Whole-pixel placement: strips are pasted, never resampled again.
+        // Whole-pixel placement: strips are pasted, never resampled again. The canvas is as tall
+        // as everything the strips reach between them, not just what they all share.
         val xs = IntArray(n) { exact[it].roundToInt() }
-        val ys = IntArray(n) { (ysF[it] - yMean).roundToInt() }
+        val top = ysF.min()
+        val ys = IntArray(n) { (ysF[it] - top).roundToInt() }
+        val canvasH = (0 until n).maxOf { ys[it] + strips[it].image.height }
 
-        val out = Compositor(strips, xs, ys, canvasW, targetH, loop).run { progress(0.6f + 0.4f * it) }
+        val out = Compositor(strips, xs, ys, canvasW, canvasH, loop).run { progress(0.6f + 0.4f * it) }
         progress(1f)
 
         val ppr = when {
@@ -155,13 +159,17 @@ object Stitcher {
      * @property links offset of each strip in [order] from the one before it
      * @property matched false when nothing overlapped anything: [order] is then the input order
      */
-    internal class Sequence(val order: IntArray, val links: List<Link>, val planes: List<Planes>, val matched: Boolean)
+    internal class Sequence(
+        val order: IntArray, val links: List<Link>, val planes: List<Planes>, val matched: Boolean,
+        /** Every match the positions were solved from (indices into the input). */
+        val trusted: List<Pair3> = emptyList(),
+    )
 
     /**
      * Works out where strips of one height sit relative to each other. Every pair (or, in a
-     * long run, every pair of near neighbors) is aligned; the most trustworthy matches that
-     * connect everything (a maximum spanning tree) give each strip a position, and sorting by
-     * position is the order. Photos shot out of sequence, in both directions, or twice from
+     * long run, every pair of near neighbors) is aligned, by correlation and by matched marks; the most trustworthy matches that
+     * connect everything (a maximum spanning tree) give each strip a first position, every
+     * other match that agrees refines it (see [solve]), and sorting by position is the order. Photos shot out of sequence, in both directions, or twice from
      * the same spot all land where their content says they belong.
      */
     internal fun sequence(images: List<RgbaImage>, maxDy: Float = MAX_DY, progress: (Float) -> Unit = {}): Sequence {
@@ -170,18 +178,38 @@ object Stitcher {
         if (n < 2) return Sequence(IntArray(n) { it }, emptyList(), planes, n > 0)
         val window = if (n > EXHAUSTIVE) NEIGHBORS else n
         val pair = HashMap<Int, Link>()
+        val marks = planes.map { Features.marks(it.fine) }
+        val confirmed = HashSet<Int>()
+        // A strip's width in full pixels: the yardstick for "the same match".
+        val unit = planes.minOf { it.fine.w } * planes[0].fullH.toFloat() / planes[0].fine.h
         var done = 0
         val total = (0 until n).sumOf { i -> (i + 1 until n).count { j -> j - i <= window || n - (j - i) <= window } }
         for (i in 0 until n) for (j in i + 1 until n) {
             if (j - i > window && n - (j - i) > window) continue
-            pair[i * n + j] = align(planes[i], planes[j], forwardOnly = false, maxDy)
+            var l = align(planes[i], planes[j], forwardOnly = false, maxDy)
+            // A second opinion from matched marks (see [Features]). Agreement confirms the
+            // match; a well-supported disagreement overrules it; silence leaves it on its own
+            // merits, which have to be strong to count.
+            val m = Features.match(marks[i], marks[j], (maxDy * planes[i].fine.h).roundToInt())
+            if (m != null) {
+                val toFull = planes[i].fullH.toFloat() / planes[i].fine.h
+                val agrees = abs(m.dx * toFull - l.dx) <= AGREES * unit
+                if (agrees) confirmed += i * n + j
+                else if (m.votes >= OVERRULES) {
+                    l = Link(m.dx * toFull, m.dy * toFull, SURE_ENOUGH + (1f - SURE_ENOUGH) * min(1f, m.votes / 30f))
+                    confirmed += i * n + j
+                }
+            }
+            pair[i * n + j] = l
             progress(0.9f * ++done / total)
         }
+        fun confirmed(i: Int, j: Int) = (if (i < j) i * n + j else j * n + i) in confirmed
         fun link(i: Int, j: Int): Link? =
             if (i < j) pair[i * n + j] else pair[j * n + i]?.let { Link(-it.dx, -it.dy, it.score) }
 
         // Prim's algorithm on match score; positions follow the tree.
         val x = FloatArray(n)
+        val y = FloatArray(n)
         val inTree = BooleanArray(n)
         inTree[0] = true
         var weakest = 1f
@@ -192,7 +220,7 @@ object Stitcher {
             var to = -1
             for (i in 0 until n) if (inTree[i]) for (j in 0 until n) if (!inTree[j]) {
                 val l = link(i, j) ?: continue
-                val trust = trust(l, i, j, n)
+                val trust = trust(l, i, j, n) + if (confirmed(i, j)) CONFIRMED else 0f
                 if (trust > bestTrust) { bestTrust = trust; best = l; from = i; to = j }
             }
             if (best == null) {
@@ -202,23 +230,80 @@ object Stitcher {
                 weakest = 0f
             } else {
                 x[to] = x[from] + best!!.dx
+                y[to] = y[from] + best!!.dy
                 weakest = min(weakest, best!!.score)
             }
             inTree[to] = true
         }
         val matched = pair.values.any { it.score >= MATCHES }
-        val order = if (matched) (0 until n).sortedBy { x[it] }.toIntArray() else IntArray(n) { it }
-        // Neighbors overlap most, so their own match is the best measure of the step between
-        // them; where it is poor, the tree's positions stand in.
+        if (!matched) {
+            progress(1f)
+            val links = (1 until n).map { Link(max(1f, x[it] - x[it - 1]), 0f, 0f) }
+            return Sequence(IntArray(n) { it }, links, planes, false, emptyList())
+        }
+
+        // The tree used n-1 matches and threw the rest away. Every other match that agrees
+        // with it (within a tenth of a strip) is a second, third, fourth opinion on the same
+        // positions; solving for the positions that satisfy all of them at once spreads each
+        // match's error over the whole set instead of letting it pile up along a chain.
+        val h = planes[0].fullH.toFloat()
+        val trusted = ArrayList<Pair3>()
+        for (i in 0 until n) for (j in i + 1 until n) {
+            val l = pair[i * n + j] ?: continue
+            // Correlation alone finds some match between any two strips; without marks to
+            // back it, only a strong one is believed.
+            if (l.score < MATCHES || (!confirmed(i, j) && l.score < SURE_ENOUGH)) continue
+            if (abs(l.dx - (x[j] - x[i])) > AGREES * unit || abs(l.dy - (y[j] - y[i])) > AGREES * h) continue
+            trusted += Pair3(i, j, l)
+        }
+        solve(x, trusted) { it.dx }
+        solve(y, trusted) { it.dy }
+
+        val order = (0 until n).sortedBy { x[it] }.toIntArray()
         val links = (1 until n).map { k ->
             val a = order[k - 1]
             val b = order[k]
-            val direct = link(a, b) ?: align(planes[a], planes[b], forwardOnly = false, maxDy)
-            if (direct.score >= MATCHES && direct.dx > 0f) direct else Link(max(1f, x[b] - x[a]), 0f, direct.score)
+            Link(max(1f, x[b] - x[a]), y[b] - y[a], link(a, b)?.score ?: 0f)
         }
         progress(1f)
-        return Sequence(order, links, planes, matched)
+        return Sequence(order, links, planes, true, trusted)
     }
+
+    /** A believed match: strip [j] sits at [link] from strip [i]. */
+    internal class Pair3(val i: Int, val j: Int, val link: Link)
+
+    /**
+     * Weighted least squares for one coordinate: find values with v[j] - v[i] as close as
+     * possible to every trusted match's offset, better matches counting for more. Solved by
+     * relaxation from the values given (each strip moves to the weighted mean of where its
+     * matches put it); strip 0 stays put, which fixes the otherwise free overall shift.
+     */
+    private fun solve(v: FloatArray, pairs: List<Pair3>, offset: (Link) -> Float) {
+        if (pairs.isEmpty()) return
+        repeat(RELAXATIONS) {
+            for (k in 1 until v.size) {
+                var sum = 0f
+                var weight = 0f
+                for (p in pairs) {
+                    val wgt = p.link.score * p.link.score
+                    if (p.j == k) { sum += wgt * (v[p.i] + offset(p.link)); weight += wgt }
+                    else if (p.i == k) { sum += wgt * (v[p.j] - offset(p.link)); weight += wgt }
+                }
+                if (weight > 0f) v[k] = sum / weight
+            }
+        }
+    }
+
+    /** Head start, in the tree, for a match that marks confirm. */
+    private const val CONFIRMED = 0.25f
+    /** Marks agreeing in at least this number overrule correlation when the two disagree. */
+    private const val OVERRULES = 10
+    /** Correlation this high is believed without marks to confirm it. */
+    private const val SURE_ENOUGH = 0.6f
+
+    /** A match within this fraction of a strip of where the tree puts it is taken to be the same match. */
+    private const val AGREES = 0.12f
+    private const val RELAXATIONS = 60
 
     /** One row band's own match between two strips: where it is ([y], in a's rows) and its offset. */
     internal class BandLink(val y: Float, val dx: Float, val dy: Float, val score: Float)
@@ -258,31 +343,41 @@ object Stitcher {
 
     /**
      * Geometry puts each strip nearly right; the pictures say how far off it still is. For
-     * each pair of neighbors the band offsets are fitted with a line down the strip: the
-     * slope of dx is their difference in lean, the slope of dy their difference in size.
-     * Differences chain along the sequence into one correction per strip, centered so the
-     * set as a whole is neither tilted nor resized.
+     * each trusted pair the band offsets are fitted with a line down the strip: the slope of
+     * dx is their difference in lean, the slope of dy their difference in size. The per-strip
+     * corrections that best satisfy all those differences are solved together, centered so
+     * the set as a whole is neither tilted nor resized.
      */
     internal fun corrections(images: List<RgbaImage>, maxDy: Float = MAX_DY): List<Correction> {
         val n = images.size
         if (n < 2) return List(n) { Correction() }
         val seq = sequence(images, maxDy)
         if (!seq.matched) return List(n) { Correction() }
+        // One difference in lean and one in size per trusted pair, not just per neighbor;
+        // then the per-strip values that best satisfy all of them.
+        class Diff(val i: Int, val j: Int, val shear: Float, val stretch: Float, val weight: Float)
+        val diffs = seq.trusted.mapNotNull { p ->
+            val good = bandLinks(images[p.i], images[p.j], p.link).filter { it.score >= BAND_TRUST }
+            if (good.size < 3) return@mapNotNull null
+            val ys = good.map { it.y }
+            Diff(
+                p.i, p.j,
+                EdgeSuggester.robustFit(ys, good.map { it.dx }).second.coerceIn(-MAX_SHEAR, MAX_SHEAR),
+                EdgeSuggester.robustFit(ys, good.map { it.dy }).second.coerceIn(-MAX_STRETCH, MAX_STRETCH),
+                good.size * p.link.score,
+            )
+        }
         val shear = FloatArray(n)
         val stretch = FloatArray(n)
-        for (k in 1 until n) {
-            val a = seq.order[k - 1]
-            val b = seq.order[k]
-            val good = bandLinks(images[a], images[b], seq.links[k - 1]).filter { it.score >= BAND_TRUST }
-            var dShear = 0f
-            var dStretch = 0f
-            if (good.size >= 3) {
-                val ys = good.map { it.y }
-                dShear = EdgeSuggester.robustFit(ys, good.map { it.dx }).second.coerceIn(-MAX_SHEAR, MAX_SHEAR)
-                dStretch = EdgeSuggester.robustFit(ys, good.map { it.dy }).second.coerceIn(-MAX_STRETCH, MAX_STRETCH)
+        repeat(RELAXATIONS) {
+            for (k in 0 until n) {
+                var sh = 0f; var st = 0f; var weight = 0f
+                for (d in diffs) {
+                    if (d.j == k) { sh += d.weight * (shear[d.i] + d.shear); st += d.weight * (stretch[d.i] + d.stretch); weight += d.weight }
+                    else if (d.i == k) { sh += d.weight * (shear[d.j] - d.shear); st += d.weight * (stretch[d.j] - d.stretch); weight += d.weight }
+                }
+                if (weight > 0f) { shear[k] = sh / weight; stretch[k] = st / weight }
             }
-            shear[b] = shear[a] + dShear
-            stretch[b] = stretch[a] + dStretch
         }
         val meanShear = shear.average().toFloat()
         val meanStretch = stretch.average().toFloat()

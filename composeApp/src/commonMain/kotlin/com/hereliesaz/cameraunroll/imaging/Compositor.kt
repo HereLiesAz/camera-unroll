@@ -54,9 +54,13 @@ internal class Compositor(
         for (i in 0 until pairs) seams += seam(i, gains, seams.lastOrNull(), flows[i])
         progress(0.3f)
 
+        // The lighting band is a heavy blur, so it is kept on a grid Q times coarser than the
+        // canvas (a sixteenth of the memory) and read back smoothly; only detail is full size.
+        val qw = (canvasW + Q - 1) / Q
+        val qh = (canvasH + Q - 1) / Q
+        val low = FloatArray(qw * qh * 3)
+        val lowW = FloatArray(qw * qh)
         val size = canvasW * canvasH
-        val low = FloatArray(size * 3)
-        val lowW = FloatArray(size)
         val high = FloatArray(size * 3)
         val highW = FloatArray(size)
         for (i in 0 until n) {
@@ -68,40 +72,92 @@ internal class Compositor(
             val right = if (i < pairs) seams[i] else null
             val leftFlow = if (i > 0) flows[i - 1] else if (loop) flows[n - 1].shifted(-canvasW) else null
             val bent = bend(i, left, right, leftFlow, if (i < pairs) flows[i] else null)
-            paste(i, bent, gains[i], left, right, low, lowW, high, highW)
+            paste(i, bent, gains[i], left, right, low, lowW, qw, qh, high, highW)
             progress(0.3f + 0.6f * (i + 1) / n)
         }
 
+        // Blend the coarse lighting, and let it spread one cell past where it has data so the
+        // smooth read-back does not darken toward the canvas's ragged ends.
+        val light = Array(3) { c -> FloatArray(qw * qh) { if (lowW[it] > 0f) low[3 * it + c] / lowW[it] else -1f } }
+        for (c in 0 until 3) repeat(2) { spread(light[c], qw, qh) }
+
         val full = RgbaImage(canvasW, canvasH)
         val covered = IntArray(canvasH)
-        for (k in 0 until size) {
-            if (lowW[k] <= 0f) { full.pixels[k] = 0xFF000000.toInt(); continue }
-            covered[k / canvasW]++
-            val hw = highW[k]
-            var p = 0xFF
-            for (c in 0 until 3) {
-                val v = low[3 * k + c] / lowW[k] + if (hw > 0f) high[3 * k + c] / hw else 0f
-                p = (p shl 8) or v.roundToInt().coerceIn(0, 255)
+        for (y in 0 until canvasH) {
+            val fy = (y + 0.5f) / Q - 0.5f
+            for (x in 0 until canvasW) {
+                val k = y * canvasW + x
+                val hw = highW[k]
+                if (hw <= 0f) { full.pixels[k] = 0xFF000000.toInt(); continue }
+                covered[y]++
+                val fx = (x + 0.5f) / Q - 0.5f
+                var p = 0xFF
+                for (c in 0 until 3) {
+                    val v = max(0f, smooth(light[c], qw, qh, fx, fy, loop)) + high[3 * k + c] / hw
+                    p = (p shl 8) or v.roundToInt().coerceIn(0, 255)
+                }
+                full.pixels[k] = p
             }
-            full.pixels[k] = p
         }
         return cropToCovered(full, covered)
     }
 
+    /** Cells marked -1 (no data) take the mean of their neighbors that have some. */
+    private fun spread(a: FloatArray, w: Int, h: Int) {
+        val src = a.copyOf()
+        for (y in 0 until h) for (x in 0 until w) {
+            if (src[y * w + x] != -1f) continue
+            var sum = 0f; var c = 0
+            for (dy in -1..1) for (dx in -1..1) {
+                val xx = x + dx; val yy = y + dy
+                if (xx in 0 until w && yy in 0 until h && src[yy * w + xx] != -1f) { sum += src[yy * w + xx]; c++ }
+            }
+            if (c > 0) a[y * w + x] = sum / c
+        }
+    }
+
     /**
-     * Strips sit at slightly different heights; keep only the rows every strip reaches, so no
-     * row is patched from a photo that was not meant to supply it.
+     * Bilinear read of a coarse grid at cell coordinates ([fx], [fy]), skipping cells with no
+     * data (-1); -1 when none of the four has any. [wrapX]: the grid closes on itself sideways.
+     */
+    private fun smooth(a: FloatArray, w: Int, h: Int, fx: Float, fy: Float, wrapX: Boolean): Float {
+        val x0 = kotlin.math.floor(fx).toInt()
+        val y0 = kotlin.math.floor(fy).toInt()
+        val tx = fx - x0
+        val ty = fy - y0
+        var sum = 0f
+        var weight = 0f
+        for (j in 0..1) {
+            val yy = (y0 + j).coerceIn(0, h - 1)
+            for (i in 0..1) {
+                val xx = if (wrapX) (((x0 + i) % w) + w) % w else (x0 + i).coerceIn(0, w - 1)
+                val v = a[yy * w + xx]
+                if (v == -1f) continue
+                val k = (if (i == 0) 1f - tx else tx) * (if (j == 0) 1f - ty else ty)
+                sum += k * v
+                weight += k
+            }
+        }
+        return if (weight > 1e-6f) sum / weight else -1f
+    }
+
+    /**
+     * Strips sit at different heights, so the canvas has ragged ends. Keep the tallest run of
+     * rows that are painted all the way across: a row needs some photo at every column, not
+     * every photo, so one shot taken high or low no longer trims the whole result.
      */
     private fun cropToCovered(img: RgbaImage, covered: IntArray): RgbaImage {
         val need = (canvasW * 0.995f).toInt()
-        var top = max(0, (0 until n).maxOf { ys[it] })
-        var bottom = min(canvasH - 1, (0 until n).minOf { strips[it].image.height + ys[it] } - 1)
-        if (bottom - top < canvasH / 2) { top = 0; bottom = canvasH - 1 }
-        while (top < bottom && covered[top] < need) top++
-        while (bottom > top && covered[bottom] < need) bottom--
-        val h = bottom - top + 1
-        if (h == canvasH || h < canvasH / 2) return img
-        return RgbaImage(canvasW, h, img.pixels.copyOfRange(top * canvasW, (bottom + 1) * canvasW))
+        var bestTop = 0
+        var bestLen = 0
+        var runTop = 0
+        for (y in 0..canvasH) {
+            if (y < canvasH && covered[y] >= need) continue
+            if (y - runTop > bestLen) { bestLen = y - runTop; bestTop = runTop }
+            runTop = y + 1
+        }
+        if (bestLen == canvasH || bestLen < 2) return img
+        return RgbaImage(canvasW, bestLen, img.pixels.copyOfRange(bestTop * canvasW, (bestTop + bestLen) * canvasW))
     }
 
     /** Column of strip [j] in strip [i]'s unwrapped frame, where j follows i (wrapping at the end). */
@@ -223,59 +279,111 @@ internal class Compositor(
     }
 
     /**
-     * Adds strip [i] to the canvas: its blurred band weighted by a wide ramp either side of its
-     * cuts, its detail band by a ramp only a few pixels wide. A whisper of weight everywhere the
-     * strip has data fills any spot no cut assigned to anyone.
+     * Adds strip [i] to the canvas. Its lighting (a heavy blur, made and kept on the coarse
+     * grid) goes in weighted by a wide ramp either side of its cuts; its detail (what the blur
+     * leaves) by a ramp only a few pixels wide.
      */
     private fun paste(
         i: Int, img: RgbaImage, gain: FloatArray, left: Seam?, right: Seam?,
-        low: FloatArray, lowW: FloatArray, high: FloatArray, highW: FloatArray,
+        low: FloatArray, lowW: FloatArray, qw: Int, qh: Int, high: FloatArray, highW: FloatArray,
     ) {
         val s = strips[i]
         val w = img.width
         val h = img.height
-        val radius = max(3, canvasH / 48)
+        val endFeather = max(8f, h / 12f)
+
+        /** How much of this strip belongs at canvas column [ux] (unwrapped), row [cy]: lighting, detail. */
+        fun weights(ux: Float, cy: Int, y: Float, column: Float, out: FloatArray) {
+            var wide = 1f
+            var narrow = 1f
+            val row = cy.coerceIn(0, canvasH - 1)
+            if (left != null) {
+                val d = ux - left.x[row]
+                wide *= (0.5f + d / (2f * left.feather)).coerceIn(0f, 1f)
+                narrow *= (0.5f + d / (2f * DETAIL_FEATHER)).coerceIn(0f, 1f)
+            }
+            if (right != null) {
+                val d = right.x[row] - ux
+                wide *= (0.5f + d / (2f * right.feather)).coerceIn(0f, 1f)
+                narrow *= (0.5f + d / (2f * DETAIL_FEATHER)).coerceIn(0f, 1f)
+            }
+            // Where a strip ends above or below, it bows out: its lighting over a tall ramp,
+            // its detail over a few rows, so whichever neighbor reaches further takes over
+            // without a line. That neighbor is there through the fill weight: a little of
+            // every strip's lighting everywhere it has data, and a whisper of its detail.
+            val toEnd = min(y + 1f, h - y)
+            out[0] = wide * (toEnd / endFeather).coerceIn(0f, 1f) + FILL_LIGHT * max(0.01f, column)
+            out[1] = narrow * (toEnd / DETAIL_END).coerceIn(0f, 1f) + FILL_DETAIL * max(0.01f, column)
+        }
+
+        // The strip on the canvas's coarse grid: each cell the mean of the strip's pixels in it.
+        val cellX0 = floorDiv(xs[i], Q)
+        val cellY0 = floorDiv(ys[i], Q)
+        val cw = floorDiv(xs[i] + w - 1, Q) - cellX0 + 1
+        val ch = floorDiv(ys[i] + h - 1, Q) - cellY0 + 1
+        val radius = max(1, canvasH / 48 / Q)
         val blurred = Array(3) { c ->
             val shift = 16 - 8 * c
-            val v = FloatArray(w * h) { if ((img.pixels[it] ushr 24) < 128) -1f else ((img.pixels[it] shr shift) and 0xFF) * gain[c] }
+            val sum = FloatArray(cw * ch)
+            val count = IntArray(cw * ch)
+            for (y in 0 until h) {
+                val cell = (floorDiv(ys[i] + y, Q) - cellY0) * cw
+                for (x in 0 until w) {
+                    val p = img.pixels[y * w + x]
+                    if ((p ushr 24) < 128) continue
+                    val k = cell + floorDiv(xs[i] + x, Q) - cellX0
+                    sum[k] += ((p shr shift) and 0xFF) * gain[c]
+                    count[k]++
+                }
+            }
+            val v = FloatArray(cw * ch) { if (count[it] == 0) -1f else sum[it] / count[it] }
             // Two box passes make a tent: no blocky halo around bright spots.
-            val once = boxMean(v, w, h, radius, radius)
+            val once = boxMean(v, cw, ch, radius, radius)
             for (k in once.indices) if (v[k] == -1f) once[k] = -1f
-            boxMean(once, w, h, radius, radius)
+            val twice = boxMean(once, cw, ch, radius, radius)
+            for (k in twice.indices) if (v[k] == -1f) twice[k] = -1f
+            twice
         }
+
+        val wgt = FloatArray(2)
+        // Lighting, cell by cell.
+        for (cyc in 0 until ch) {
+            val qy = cellY0 + cyc
+            if (qy !in 0 until qh) continue
+            val centerY = qy * Q + Q / 2
+            for (cxc in 0 until cw) {
+                if (blurred[0][cyc * cw + cxc] == -1f) continue
+                val ux = (cellX0 + cxc) * Q + Q / 2f
+                var qx = cellX0 + cxc
+                if (loop) qx = ((qx % qw) + qw) % qw else if (qx !in 0 until qw) continue
+                val column = s.columnWeight[(ux - xs[i]).toInt().coerceIn(0, w - 1)]
+                weights(ux, centerY, (centerY - ys[i]).toFloat().coerceIn(0f, h - 1f), column, wgt)
+                val k = qy * qw + qx
+                for (c in 0 until 3) low[3 * k + c] += wgt[0] * blurred[c][cyc * cw + cxc]
+                lowW[k] += wgt[0]
+            }
+        }
+        // Detail, pixel by pixel: what the strip has beyond its own lighting, read back the
+        // same smooth way the blended lighting will be.
         for (cy in 0 until canvasH) {
             val y = cy - ys[i]
             if (y < 0 || y >= h) continue
+            val fy = (cy + 0.5f) / Q - 0.5f - cellY0
             for (cx in 0 until w) {
                 val p = img.pixels[y * w + cx]
                 if ((p ushr 24) < 128) continue
                 val ux = xs[i] + cx
                 var x = ux
                 if (loop) x = ((x % canvasW) + canvasW) % canvasW else if (x !in 0 until canvasW) continue
-                var wide = 1f
-                var narrow = 1f
-                if (left != null) {
-                    val d = ux - left.x[cy] + 0.5f
-                    wide *= (0.5f + d / (2f * left.feather)).coerceIn(0f, 1f)
-                    narrow *= (0.5f + d / (2f * DETAIL_FEATHER)).coerceIn(0f, 1f)
-                }
-                if (right != null) {
-                    val d = right.x[cy] - ux - 0.5f
-                    wide *= (0.5f + d / (2f * right.feather)).coerceIn(0f, 1f)
-                    narrow *= (0.5f + d / (2f * DETAIL_FEATHER)).coerceIn(0f, 1f)
-                }
-                val fill = FILL * max(0.01f, s.columnWeight[cx])
-                wide += fill
-                narrow += fill
+                weights(ux + 0.5f, cy, y.toFloat(), s.columnWeight[cx], wgt)
+                val fx = (ux + 0.5f) / Q - 0.5f - cellX0
                 val k = cy * canvasW + x
                 for (c in 0 until 3) {
-                    val l = blurred[c][y * w + cx]
                     val v = ((p shr (16 - 8 * c)) and 0xFF) * gain[c]
-                    low[3 * k + c] += wide * l
-                    high[3 * k + c] += narrow * (v - l)
+                    val l = smooth(blurred[c], cw, ch, fx, fy, false)
+                    if (l != -1f) high[3 * k + c] += wgt[1] * (v - l)
                 }
-                lowW[k] += wide
-                highW[k] += narrow
+                highW[k] += wgt[1]
             }
         }
     }
@@ -446,22 +554,33 @@ internal class Compositor(
         return out
     }
 
-    private companion object {
-        const val FLOW_H = 320
+    companion object {
+        /** Loop canvases must be a multiple of this wide (see [Q]). */
+        internal const val GRID = 4
+
+        private const val FLOW_H = 320
         /** Largest local disagreement looked for, as a fraction of the height. */
-        const val FLOW_REACH = 0.025f
-        const val FLOW_TRUST = 0.45f
-        const val BLOCK = 12
+        private const val FLOW_REACH = 0.025f
+        private const val FLOW_TRUST = 0.45f
+        private const val BLOCK = 12
         /** Cost of cutting where one photo has no data, per pixel. */
-        const val MISSING = 200f
+        private const val MISSING = 200f
         /** Cost of cutting to the left of the previous cut: effectively forbidden. */
-        const val BEHIND = 1e6f
-        const val MIN_GAP = 2
+        private const val BEHIND = 1e6f
+        private const val MIN_GAP = 2
         /** Pull toward the column both strips see equally squarely (weights differ by 0..1). */
-        const val SQUARENESS = 30f
+        private const val SQUARENESS = 30f
         /** Lighting fades across this fraction of the overlap, either side of the cut. */
-        const val FEATHER = 0.35f
-        const val DETAIL_FEATHER = 1.5f
-        const val FILL = 1e-4f
+        private const val FEATHER = 0.35f
+        private const val DETAIL_FEATHER = 1.5f
+        /** The lighting band's grid is this many times coarser than the canvas. */
+        private const val Q = GRID
+        private const val FILL_LIGHT = 0.03f
+        private const val FILL_DETAIL = 1e-4f
+        /** Rows over which a strip's detail hands over at its top and bottom edge. */
+        private const val DETAIL_END = 4f
     }
 }
+
+/** Integer division rounding toward negative infinity (strip offsets can be negative). */
+private fun floorDiv(a: Int, b: Int): Int = if (a >= 0) a / b else -((-a + b - 1) / b)

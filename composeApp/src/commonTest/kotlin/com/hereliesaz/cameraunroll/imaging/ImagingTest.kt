@@ -357,3 +357,73 @@ class DepthSidesTest {
         assertEquals(null, DepthSides.measure(flat))
     }
 }
+
+class PillarShapeTest {
+    /** A bright column whose half-width follows [half] (row as -1..1), on a dark ground. */
+    private fun depth(half: (Float) -> Float): RgbaImage {
+        val w = 280; val h = 392
+        return RgbaImage(w, h, IntArray(w * h) { i ->
+            val x = i % w; val y = i / w
+            val u = (y - h / 2f) / (h / 2f)
+            val g = if (abs(x - 140f) < half(u)) 230 else 30
+            (0xFF shl 24) or (g shl 16) or (g shl 8) or g
+        })
+    }
+
+    @Test
+    fun aStraightPillarHasNoProfile() = assertEquals(null, DepthSides.profile(depth { 45f }))
+
+    @Test
+    fun aTaperIsLeftToTheLeveler() = assertEquals(null, DepthSides.profile(depth { 45f + 6f * it }))
+
+    @Test
+    fun aBarrelIsMeasured() {
+        // 12% wider at mid-height than at the frame's ends.
+        val p = DepthSides.profile(depth { 45f * (1.12f - 0.12f * it * it) })!!
+        val mid = p[p.size / 2]
+        assertTrue(abs(p.first() / mid - 1f / 1.12f) < 0.03f, "top ${p.first() / mid}")
+        assertTrue(abs(p.last() / mid - 1f / 1.12f) < 0.03f, "bottom ${p.last() / mid}")
+    }
+
+    @Test
+    fun aFlatProfileUnrollsLikeACylinder() {
+        val w = 300; val h = 400; val f = 320f
+        // Smooth gradients, so a sub-pixel difference in sampling shows as a small difference.
+        val img = RgbaImage(w, h, IntArray(w * h) { i ->
+            val x = i % w; val y = i / w
+            (0xFF shl 24) or ((x * 255 / w) shl 16) or ((y * 255 / h) shl 8) or ((x + y) * 255 / (w + h))
+        })
+        // Rims a level camera would see: both agree on where the horizon is.
+        val d = Perspective.distance(0.2f * w, f)
+        val (topY, topBulge) = Perspective.rim(0.12f, 0.5f, d)
+        val (bottomY, bottomBulge) = Perspective.rim(0.88f, 0.5f, d)
+        val g = CylinderGuides(0.3f, 0.7f, topY, topBulge, bottomY, bottomBulge)
+        val plain = CylinderUnroller.unroll(img, g, 55f, f).image
+        val flat = CylinderUnroller.unroll(img, g, 55f, f, profile = FloatArray(DepthSides.PROFILE_SAMPLES) { 1f }).image
+        assertEquals(plain.width, flat.width); assertEquals(plain.height, flat.height)
+        var worst = 0
+        for (i in plain.pixels.indices) for (shift in intArrayOf(16, 8, 0)) {
+            worst = maxOf(worst, abs(((plain.pixels[i] shr shift) and 0xFF) - ((flat.pixels[i] shr shift) and 0xFF)))
+        }
+        assertTrue(worst <= 3, "largest channel difference $worst")
+    }
+}
+
+class ShapeConsensusTest {
+    private val waist = FloatArray(DepthSides.PROFILE_SAMPLES) { 1f + 0.06f * abs(it - 4) / 4f }
+    private val barrel = FloatArray(DepthSides.PROFILE_SAMPLES) { 1f - 0.06f * abs(it - 4) / 4f }
+
+    @Test
+    fun twoOfEightIsClutterNotShape() =
+        assertEquals(null, DepthSides.consensus(listOf(null, null, waist, null, null, null, null, waist)))
+
+    @Test
+    fun mostPhotosAgreeingIsAShape() {
+        val p = DepthSides.consensus(listOf(waist, waist, null, waist, waist, waist))!!
+        assertTrue(abs(p.first() - 1.06f) < 1e-4f && abs(p[4] - 1f) < 1e-4f)
+    }
+
+    @Test
+    fun oppositeShapesDoNotAddUp() =
+        assertEquals(null, DepthSides.consensus(listOf(waist, barrel, waist, barrel, null)))
+}
