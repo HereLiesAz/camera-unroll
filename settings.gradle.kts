@@ -11,6 +11,9 @@ pluginManagement {
 
 dependencyResolutionManagement {
     repositories {
+        maven("https://raw.githubusercontent.com/HereLiesAz/AzNavRail/update-maven/") {
+            content { includeModule("com.github.HereLiesAz.AzNavRail", "aznavrail-updates-compat") }
+        }
         google()
         mavenCentral()
     }

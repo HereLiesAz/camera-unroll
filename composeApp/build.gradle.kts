@@ -69,6 +69,7 @@ kotlin {
             implementation(libs.kotlin.test)
         }
         androidMain.dependencies {
+            implementation("com.github.HereLiesAz.AzNavRail:aznavrail-updates-compat:12.5")
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.core)
             implementation(libs.androidx.camera.core)
