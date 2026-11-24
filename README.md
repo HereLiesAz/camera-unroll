@@ -152,3 +152,7 @@ iOS: open an Xcode project at `iosApp/` whose target embeds the `ComposeApp` fra
 - Beams: square columns only (four equal faces, vertical edges). A tapering beam, a rectangular one with unequal faces, or other counts of sides are not modeled. Faces are told apart by what is on them, so four identical faces cannot be sorted. Edges are found automatically and cannot yet be dragged by hand. The guided camera was designed around round pillars; around a beam its width and step cues are approximate.
 - Order is recovered from content, so photos with no overlap, a plain featureless surface, or a surface with exact repeats (evenly spaced identical stripes) can be misordered; check the thumbnails and fix the guides, then press ORDER, or drag the thumbnails into place.
 - Inputs are capped at 1600 px on the long side to stay inside mobile and browser memory.
+
+## Android updates
+
+Android release builds check stable GitHub releases through AzNavRail 12.5. The check sends no images or processing data; all image processing remains local. Desktop, iOS and web builds are unchanged.

@@ -1,5 +1,7 @@
 package com.hereliesaz.cameraunroll
 
+import com.hereliesaz.aznavrail.updates.AzUpdateChecker
+
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,6 +14,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        AzUpdateChecker.check(this, "HereLiesAz/camera-unroll")
         AppContext.app = applicationContext
         ActivityHolder.attach(this) // Permission requests and the camera's lifecycle.
         FileKit.init(this) // Save dialog needs an activity result registry.
